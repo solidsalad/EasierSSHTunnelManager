@@ -263,7 +263,9 @@ Each tunnel opens its own SSH connection (`-o ControlMaster=no -o ControlPath=no
 
 ## Autostart on Login
 
-To start the application automatically when you log in:
+`sudo ./install.sh` asks whether to start the application at login and, when you answer yes, installs `~/.config/autostart/easy-ssh-tunnel.desktop` for the user who ran sudo. Tunnels are not started automatically.
+
+To set it up by hand instead:
 
 1. Open "Startup Applications" in Gnome
 2. Click "Add"
