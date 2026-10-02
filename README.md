@@ -1,5 +1,17 @@
 # Easy SSH Tunnel Manager
 
+> Fork of [ProjectMakersDE/EasySSHTunnelManager](https://github.com/ProjectMakersDE/EasySSHTunnelManager) with the changes from upstream PRs #2 to #6 merged:
+>
+> | Change | Upstream PR |
+> |---|---|
+> | Tunnels keyed by id, ports closed on stop with ControlMaster in ~/.ssh/config, optional user/port, Ayatana tray support, English labels | [#2](https://github.com/ProjectMakersDE/EasySSHTunnelManager/pull/2) |
+> | Running / Connecting / Stopped / Offline status, ssh errors in a Messages column, ON/OFF switch per row, Start all / Stop all, open in terminal, quit confirmation | [#3](https://github.com/ProjectMakersDE/EasySSHTunnelManager/pull/3) |
+> | Detection of tunnels opened outside the app | [#4](https://github.com/ProjectMakersDE/EasySSHTunnelManager/pull/4) |
+> | Tunnel colors and a dark theme | [#5](https://github.com/ProjectMakersDE/EasySSHTunnelManager/pull/5) |
+> | Autostart question in install.sh | [#6](https://github.com/ProjectMakersDE/EasySSHTunnelManager/pull/6) |
+>
+> The screenshots below are from the upstream version.
+
 ![Logo](icons/logo.png)
 
 **A simple, user-friendly GUI application for managing SSH tunnels on Linux.** Easy SSH Tunnel Manager lets you create, configure, and monitor local, remote, and dynamic SSH tunnels through an intuitive interface with system tray integration.
@@ -72,7 +84,7 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/ProjectMakersDE/EasySSHTunnelManager.git
+git clone https://github.com/solidsalad/EasySSHTunnelManager.git
 cd EasySSHTunnelManager
 
 # Install system dependencies
