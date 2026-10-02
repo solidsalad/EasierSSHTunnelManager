@@ -34,7 +34,7 @@
 ### System Tray Integration
 ![System Tray](screenshots/system-tray.png)
 
-*Quick access to tunnels from the system tray with status indicators*
+*Tray menu: status on the left (🟢 running, 🟡 connecting, 🔴 stopped, 🟠 external, ⚪ offline), tunnel color on the right. Click a tunnel to switch it on or off.*
 
 ### Add/Edit Tunnel Dialog
 ![Add Tunnel](screenshots/add-tunnel.png)
