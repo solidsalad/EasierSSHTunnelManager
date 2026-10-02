@@ -794,6 +794,11 @@ class TunnelDialog(Gtk.Dialog):
 
         box.pack_start(self.tunnel_grid, False, False, 0)
 
+        # Let the fields use the dialog width so long host names stay readable
+        for entry in (self.ssh_user_entry, self.ssh_host_entry, self.ssh_port_entry,
+                      self.local_port_entry, self.remote_host_entry, self.remote_port_entry):
+            entry.set_hexpand(True)
+
         # Multi-forward info label (shown when editing tunnels with multiple forwards)
         self.multi_forward_label = Gtk.Label()
         self.multi_forward_label.set_markup("<b>Note:</b> This tunnel has multiple port forwards.\nTo edit them, delete this tunnel and re-import the SSH command.")

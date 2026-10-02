@@ -12,7 +12,7 @@
 >
 > The app is renamed to Easier SSH Tunnel Manager: command `easier_ssh_tunnel.py`, config in `~/.config/easier-ssh-tunnel/`. On first start it copies the tunnels from `~/.config/easy-ssh-tunnel/`, so it can be installed next to the original.
 >
-> The screenshots below are from the upstream version.
+> The screenshots below use demo tunnels on example.com hosts.
 
 ![Logo](icons/logo.png)
 
@@ -29,7 +29,7 @@
 ### Main Window
 ![Main Window](screenshots/main-window.png)
 
-*The main interface showing all configured SSH tunnels with their status*
+*Main window: ON/OFF switch, tunnel color, status and the last ssh error per tunnel. The bar above the list shows a tunnel found outside the app.*
 
 ### System Tray Integration
 ![System Tray](screenshots/system-tray.png)
@@ -39,7 +39,7 @@
 ### Add/Edit Tunnel Dialog
 ![Add Tunnel](screenshots/add-tunnel.png)
 
-*Easy-to-use dialog for configuring SSH tunnels*
+*Tunnel dialog with color picker. User and Port left empty are taken from `~/.ssh/config`.*
 
 ---
 
