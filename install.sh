@@ -1,7 +1,7 @@
 #!/bin/bash
-# Installation script for Easy SSH Tunnel Manager
+# Installation script for Easier SSH Tunnel Manager
 
-echo "Easy SSH Tunnel Manager - Installation Script"
+echo "Easier SSH Tunnel Manager - Installation Script"
 echo "=============================================="
 echo
 
@@ -32,17 +32,17 @@ fi
 
 # Copy script to /usr/local/bin
 echo "Installing application..."
-cp easy_ssh_tunnel.py /usr/local/bin/
-chmod +x /usr/local/bin/easy_ssh_tunnel.py
+cp easier_ssh_tunnel.py /usr/local/bin/
+chmod +x /usr/local/bin/easier_ssh_tunnel.py
 
 # Copy icons
 echo "Installing icons..."
-mkdir -p /usr/local/share/easy-ssh-tunnel/icons
-cp icons/*.png /usr/local/share/easy-ssh-tunnel/icons/
+mkdir -p /usr/local/share/easier-ssh-tunnel/icons
+cp icons/*.png /usr/local/share/easier-ssh-tunnel/icons/
 
 # Copy desktop entry
 echo "Installing desktop entry..."
-cp easy-ssh-tunnel.desktop /usr/share/applications/
+cp easier-ssh-tunnel.desktop /usr/share/applications/
 
 # Update desktop database
 if command -v update-desktop-database &> /dev/null; then
@@ -52,13 +52,13 @@ fi
 # Optional autostart for the user who ran sudo
 TARGET_USER="${SUDO_USER:-}"
 if [ -n "$TARGET_USER" ] && [ -t 0 ]; then
-    read -r -p "Start Easy SSH Tunnel Manager at login for $TARGET_USER? [y/N] " AUTOSTART
+    read -r -p "Start Easier SSH Tunnel Manager at login for $TARGET_USER? [y/N] " AUTOSTART
     if [[ "$AUTOSTART" =~ ^[Yy]$ ]]; then
         TARGET_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
         AUTOSTART_DIR="$TARGET_HOME/.config/autostart"
         install -d -o "$TARGET_USER" -g "$(id -gn "$TARGET_USER")" "$AUTOSTART_DIR"
         install -m 644 -o "$TARGET_USER" -g "$(id -gn "$TARGET_USER")" \
-            easy-ssh-tunnel.desktop "$AUTOSTART_DIR/easy-ssh-tunnel.desktop"
+            easier-ssh-tunnel.desktop "$AUTOSTART_DIR/easier-ssh-tunnel.desktop"
         echo "Autostart entry installed in $AUTOSTART_DIR"
         echo "Tunnels are not started automatically; switch them on from the tray menu."
     fi
@@ -66,8 +66,8 @@ fi
 
 echo
 echo "Installation complete!"
-echo "You can now launch 'Easy SSH Tunnel Manager' from your applications menu,"
-echo "or run it from the terminal with: easy_ssh_tunnel.py"
+echo "You can now launch 'Easier SSH Tunnel Manager' from your applications menu,"
+echo "or run it from the terminal with: easier_ssh_tunnel.py"
 echo
 echo "The application will run in system tray mode by default."
-echo "To run without the system tray indicator, use: easy_ssh_tunnel.py --no-indicator"
+echo "To run without the system tray indicator, use: easier_ssh_tunnel.py --no-indicator"

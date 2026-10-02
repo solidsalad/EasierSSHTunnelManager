@@ -1,4 +1,4 @@
-# Easy SSH Tunnel Manager
+# Easier SSH Tunnel Manager
 
 > Fork of [ProjectMakersDE/EasySSHTunnelManager](https://github.com/ProjectMakersDE/EasySSHTunnelManager) with the changes from upstream PRs #2 to #6 merged:
 >
@@ -10,11 +10,13 @@
 > | Tunnel colors and a dark theme | [#5](https://github.com/ProjectMakersDE/EasySSHTunnelManager/pull/5) |
 > | Autostart question in install.sh | [#6](https://github.com/ProjectMakersDE/EasySSHTunnelManager/pull/6) |
 >
+> The app is renamed to Easier SSH Tunnel Manager: command `easier_ssh_tunnel.py`, config in `~/.config/easier-ssh-tunnel/`. On first start it copies the tunnels from `~/.config/easy-ssh-tunnel/`, so it can be installed next to the original.
+>
 > The screenshots below are from the upstream version.
 
 ![Logo](icons/logo.png)
 
-**A simple, user-friendly GUI application for managing SSH tunnels on Linux.** Easy SSH Tunnel Manager lets you create, configure, and monitor local, remote, and dynamic SSH tunnels through an intuitive interface with system tray integration.
+**A simple, user-friendly GUI application for managing SSH tunnels on Linux.** Easier SSH Tunnel Manager lets you create, configure, and monitor local, remote, and dynamic SSH tunnels through an intuitive interface with system tray integration.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.6+](https://img.shields.io/badge/python-3.6+-blue.svg)](https://www.python.org/downloads/)
@@ -84,8 +86,8 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/solidsalad/EasySSHTunnelManager.git
-cd EasySSHTunnelManager
+git clone https://github.com/solidsalad/EasierSSHTunnelManager.git
+cd EasierSSHTunnelManager
 
 # Install system dependencies
 sudo apt-get update
@@ -94,10 +96,10 @@ sudo apt-get install python3 python3-gi python3-gi-cairo gir1.2-gtk-3.0 gir1.2-a
 # sudo apt-get install gir1.2-ayatanaappindicator3-0.1
 
 # Make the script executable
-chmod +x easy_ssh_tunnel.py
+chmod +x easier_ssh_tunnel.py
 
 # Run the application
-./easy_ssh_tunnel.py
+./easier_ssh_tunnel.py
 ```
 
 The application will start in system tray mode. Look for the network server icon in your top bar!
@@ -107,7 +109,7 @@ The application will start in system tray mode. Look for the network server icon
 For system-wide installation and desktop menu integration:
 
 ```bash
-cd EasySSHTunnelManager
+cd EasierSSHTunnelManager
 sudo ./install.sh
 ```
 
@@ -115,7 +117,7 @@ This will:
 - Install all required dependencies
 - Copy the script to `/usr/local/bin/`
 - Create a desktop entry for the applications menu
-- Enable the application to run from anywhere with `easy_ssh_tunnel.py`
+- Enable the application to run from anywhere with `easier_ssh_tunnel.py`
 
 After installation, you can launch it from the Gnome applications menu or add it to startup applications.
 
@@ -124,7 +126,7 @@ After installation, you can launch it from the Gnome applications menu or add it
 If you're updating from a previous version:
 
 ```bash
-cd EasySSHTunnelManager
+cd EasierSSHTunnelManager
 
 # Pull latest changes (if using git)
 git pull
@@ -133,13 +135,13 @@ git pull
 sudo apt-get install gir1.2-appindicator3-0.1
 
 # Make executable
-chmod +x easy_ssh_tunnel.py
+chmod +x easier_ssh_tunnel.py
 
 # Test the application
-./easy_ssh_tunnel.py
+./easier_ssh_tunnel.py
 ```
 
-Your existing tunnel configurations in `~/.config/easy-ssh-tunnel/tunnels.json` will be preserved.
+Your existing tunnel configurations in `~/.config/easier-ssh-tunnel/tunnels.json` will be preserved.
 
 ### On other Linux distributions
 
@@ -154,14 +156,14 @@ Install the equivalent packages for your distribution:
 
 **With System Tray (default):**
 ```bash
-./easy_ssh_tunnel.py
+./easier_ssh_tunnel.py
 ```
 
 The application will start minimized to the system tray. Look for the network icon in the top bar.
 
 **Without System Tray (window only):**
 ```bash
-./easy_ssh_tunnel.py --no-indicator
+./easier_ssh_tunnel.py --no-indicator
 ```
 
 ### Using the System Tray
@@ -250,7 +252,7 @@ Configure your browser to use `localhost:1080` as a SOCKS5 proxy.
 
 Tunnel configurations are stored in:
 ```
-~/.config/easy-ssh-tunnel/tunnels.json
+~/.config/easier-ssh-tunnel/tunnels.json
 ```
 
 You can manually edit this file if needed, but it's recommended to use the GUI.
@@ -275,15 +277,15 @@ Each tunnel opens its own SSH connection (`-o ControlMaster=no -o ControlPath=no
 
 ## Autostart on Login
 
-`sudo ./install.sh` asks whether to start the application at login and, when you answer yes, installs `~/.config/autostart/easy-ssh-tunnel.desktop` for the user who ran sudo. Tunnels are not started automatically.
+`sudo ./install.sh` asks whether to start the application at login and, when you answer yes, installs `~/.config/autostart/easier-ssh-tunnel.desktop` for the user who ran sudo. Tunnels are not started automatically.
 
 To set it up by hand instead:
 
 1. Open "Startup Applications" in Gnome
 2. Click "Add"
 3. Fill in:
-   - **Name**: Easy SSH Tunnel Manager
-   - **Command**: `/usr/local/bin/easy_ssh_tunnel.py` (or full path to the script)
+   - **Name**: Easier SSH Tunnel Manager
+   - **Command**: `/usr/local/bin/easier_ssh_tunnel.py` (or full path to the script)
    - **Comment**: Manage SSH tunnels from system tray
 4. Click "Add"
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-EasySSHTunnel - A simple GUI for managing SSH tunnels on Ubuntu/Gnome
-Now with system tray indicator support!
+Easier SSH Tunnel Manager - GUI for managing SSH tunnels on Ubuntu/GNOME.
+Fork of Easy SSH Tunnel Manager (ProjectMakersDE, MIT).
 """
 
 import gi
@@ -26,8 +26,8 @@ import time
 import uuid
 from pathlib import Path
 
-APP_ID = "easy-ssh-tunnel"
-APP_NAME = "Easy SSH Tunnel Manager"
+APP_ID = "easier-ssh-tunnel"
+APP_NAME = "Easier SSH Tunnel Manager"
 
 # Status colors
 COLOR_GREEN = "#73bf69"
@@ -389,6 +389,10 @@ class ConfigManager:
         self.config_dir = Path.home() / '.config' / APP_ID
         self.config_file = self.config_dir / 'tunnels.json'
         self.config_dir.mkdir(parents=True, exist_ok=True)
+        # First run: take over the tunnels of Easy SSH Tunnel Manager
+        legacy = Path.home() / '.config' / 'easy-ssh-tunnel' / 'tunnels.json'
+        if not self.config_file.exists() and legacy.exists():
+            shutil.copy(legacy, self.config_file)
 
     def load_tunnels(self):
         """Load saved tunnel configurations, giving each an id and a color"""
@@ -940,8 +944,8 @@ class EasySSHTunnelApp(Gtk.Window):
             script_dir = os.path.dirname(os.path.abspath(__file__))
             local_logo = os.path.join(script_dir, "icons", "logo.png")
             local_icon = os.path.join(script_dir, "icons", "easy-ssh-tunnel-white.png")
-            system_logo = "/usr/local/share/easy-ssh-tunnel/icons/logo.png"
-            system_icon = "/usr/local/share/easy-ssh-tunnel/icons/easy-ssh-tunnel-white.png"
+            system_logo = "/usr/local/share/easier-ssh-tunnel/icons/logo.png"
+            system_icon = "/usr/local/share/easier-ssh-tunnel/icons/easy-ssh-tunnel-white.png"
 
             # Try logo.png first, then fallback to other icons
             if os.path.exists(local_logo):
@@ -2008,7 +2012,7 @@ class SSHTunnelIndicator:
         # Try local directory first, then system installation directory
         script_dir = os.path.dirname(os.path.abspath(__file__))
         local_icons = os.path.join(script_dir, "icons")
-        system_icons = "/usr/local/share/easy-ssh-tunnel/icons"
+        system_icons = "/usr/local/share/easier-ssh-tunnel/icons"
 
         if os.path.exists(local_icons):
             self.icon_theme_path = local_icons

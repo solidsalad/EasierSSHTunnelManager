@@ -1,6 +1,6 @@
 # Multiple Port Forwards Example
 
-Easy SSH Tunnel Manager now supports multiple port forwards in a single SSH tunnel connection!
+Easier SSH Tunnel Manager now supports multiple port forwards in a single SSH tunnel connection!
 
 ## Example Usage
 
