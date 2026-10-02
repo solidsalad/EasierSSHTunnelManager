@@ -998,6 +998,7 @@ class EasySSHTunnelApp(Gtk.Window):
             ("Export", "document-save-symbolic", "toolbar-button-neutral", self.on_export_commands,
              "Export all tunnels as SSH commands"),
         ]
+        self.toolbar_buttons = {}
         for position, spec in enumerate(buttons):
             if spec is None:
                 toolbar.insert(Gtk.SeparatorToolItem(), position)
@@ -1011,6 +1012,7 @@ class EasySSHTunnelApp(Gtk.Window):
             self._style_toolbar_button(button, variant)
             button.connect("clicked", handler)
             toolbar.insert(button, position)
+            self.toolbar_buttons[label] = button
 
         vbox.pack_start(toolbar, False, False, 0)
 
@@ -1039,6 +1041,9 @@ class EasySSHTunnelApp(Gtk.Window):
         self.tunnel_view = Gtk.TreeView(model=self.tunnel_store)
         self.tunnel_view.get_style_context().add_class("tunnel-list")
         self.tunnel_view.connect("row-activated", self.on_row_activated)
+        # Terminal needs a selected tunnel
+        self.tunnel_view.get_selection().connect("changed", self.on_selection_changed)
+        self.toolbar_buttons["Terminal"].set_sensitive(False)
 
         # On/off switch per row
         renderer = CellRendererSwitch()
@@ -1521,12 +1526,50 @@ class EasySSHTunnelApp(Gtk.Window):
             self.ignored_external.update((e['port'], e['pid']) for e in self._new_external())
         self.auto_scan()
 
+    def on_selection_changed(self, selection):
+        self.toolbar_buttons["Terminal"].set_sensitive(self._selected_config() is not None)
+
+    # Choices in the dialog for Terminal on a tunnel that is not open
+    TERMINAL_SESSION, TERMINAL_TUNNEL, TERMINAL_BOTH = 1, 2, 3
+
     def on_open_terminal(self, widget):
-        """Open an interactive ssh session to the tunnel's host in the default terminal"""
+        """Open an ssh session in the terminal; for a closed tunnel, ask what to open"""
         config = self._selected_config()
         if not config:
-            self.show_error("Please select a tunnel")
             return
+        if self.tunnel_manager.status(config)[0] not in ON_STATUSES:
+            choice = self.ask_terminal_choice(config)
+            if choice in (self.TERMINAL_TUNNEL, self.TERMINAL_BOTH):
+                self.on_start_tunnel(None)
+            if choice not in (self.TERMINAL_SESSION, self.TERMINAL_BOTH):
+                return
+        self.open_ssh_session(config)
+
+    def ask_terminal_choice(self, config):
+        """Ask whether to start the tunnel, open an ssh session, or both"""
+        host = config.get('ssh_host', '')
+        user = config.get('ssh_user')
+        dest = f"{user}@{host}" if user else host
+        port = tunnel_port(config)
+        dialog = Gtk.MessageDialog(
+            parent=self, flags=0, message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.NONE,
+            text=f"Tunnel '{config.get('name', '')}' is not open")
+        dialog.format_secondary_text(
+            f"Start tunnel: opens local port {port} through {dest}, no shell.\n"
+            f"Open SSH session: runs ssh {dest} in the terminal, a shell on the remote host. "
+            "It does not open the tunnel's port.")
+        dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+                           "Open SSH session", self.TERMINAL_SESSION,
+                           "Start tunnel", self.TERMINAL_TUNNEL,
+                           "Both", self.TERMINAL_BOTH)
+        dialog.set_default_response(self.TERMINAL_TUNNEL)
+        response = dialog.run()
+        dialog.destroy()
+        return response
+
+    def open_ssh_session(self, config):
+        """Run an interactive ssh to the tunnel's host in the default terminal"""
         cmd = ['ssh']
         if config.get('ssh_port'):
             cmd += ['-p', str(config['ssh_port'])]

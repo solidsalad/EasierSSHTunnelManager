@@ -187,7 +187,7 @@ The application will start minimized to the system tray. Look for the network ic
    - **Start all** / **Stop all** - Start every tunnel that is not open, or stop every tunnel started by the app
    - **Start** - Activate a tunnel
    - **Stop** - Deactivate a tunnel; on a stopped tunnel this clears it to offline
-   - **Terminal** - Open `ssh [user@]host` in the default terminal (`x-terminal-emulator`)
+   - **Terminal** - Open `ssh [user@]host` in the default terminal (`x-terminal-emulator`). Greyed out until a tunnel is selected. When the tunnel is not open, a dialog offers **Start tunnel**, **Open SSH session** or **Both**; the ssh session alone does not open the tunnel's port.
 3. The switch at the start of each row shows whether the tunnel's port is open and follows the connection: it turns off when ssh exits.
 4. **Quit** (tray menu, or closing the window with `--no-indicator`) stops every tunnel the app started. When tunnels are running, the app asks first.
 
