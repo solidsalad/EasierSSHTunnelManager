@@ -10,9 +10,12 @@ try:
     gi.require_version('AppIndicator3', '0.1')
     from gi.repository import AppIndicator3
 except (ValueError, ImportError):
-    gi.require_version('AyatanaAppIndicator3', '0.1')
-    from gi.repository import AyatanaAppIndicator3 as AppIndicator3
-from gi.repository import Gtk, Gdk, GLib, GObject, Pango
+    try:
+        gi.require_version('AyatanaAppIndicator3', '0.1')
+        from gi.repository import AyatanaAppIndicator3 as AppIndicator3
+    except (ValueError, ImportError):
+        AppIndicator3 = None  # no tray library: window mode only
+from gi.repository import Gtk, Gdk, Gio, GLib, GObject, Pango
 import cairo
 import subprocess
 import json
@@ -433,19 +436,67 @@ class ConfigManager:
                 'color': TUNNEL_PALETTE[len(existing) % len(TUNNEL_PALETTE)]}
 
 
+# Terminals and the arguments that make them run a command, in order of preference
+# after $TERMINAL and the distribution's default (x-terminal-emulator, xdg-terminal-exec)
+TERMINALS = [
+    ('ptyxis', ['--']),            # Fedora 41+, Ubuntu 25.10+
+    ('kgx', ['--']),               # GNOME Console
+    ('gnome-terminal', ['--']),
+    ('konsole', ['-e']),           # KDE
+    ('xfce4-terminal', ['-x']),
+    ('mate-terminal', ['-x']),
+    ('lxterminal', ['-e']),
+    ('qterminal', ['-e']),
+    ('terminator', ['-x']),
+    ('tilix', ['-e']),
+    ('alacritty', ['-e']),
+    ('kitty', []),
+    ('wezterm', ['start', '--']),
+    ('foot', []),
+    ('xterm', ['-e']),
+]
+# Desktop -> terminals to try first
+DESKTOP_TERMINALS = {
+    'GNOME': ['ptyxis', 'kgx', 'gnome-terminal'],
+    'KDE': ['konsole'],
+    'XFCE': ['xfce4-terminal'],
+    'MATE': ['mate-terminal'],
+    'LXQT': ['qterminal'],
+    'LXDE': ['lxterminal'],
+}
+
+
 def terminal_command():
     """Command prefix that runs a program in the default terminal"""
+    env_terminal = os.environ.get('TERMINAL', '').strip()
+    if env_terminal and shutil.which(env_terminal):
+        known = dict(TERMINALS)
+        return [env_terminal] + known.get(os.path.basename(env_terminal), ['-e'])
     if shutil.which('x-terminal-emulator'):
         return ['x-terminal-emulator', '-e']
+    if shutil.which('xdg-terminal-exec'):
+        return ['xdg-terminal-exec']
+    known = dict(TERMINALS)
+    preferred = []
+    for desktop in os.environ.get('XDG_CURRENT_DESKTOP', '').upper().split(':'):
+        preferred += DESKTOP_TERMINALS.get(desktop, [])
+    for name in preferred + [name for name, _ in TERMINALS]:
+        if shutil.which(name):
+            return [name] + known[name]
+    return ['xterm', '-e']
+
+
+def tray_available():
+    """True when a StatusNotifier host (system tray) runs in this session"""
     try:
-        out = subprocess.run(['gsettings', 'get', 'org.gnome.desktop.default-applications.terminal',
-                              'exec'], capture_output=True, text=True, timeout=3).stdout
-        terminal = out.strip().strip("'")
-        if terminal and shutil.which(terminal):
-            return [terminal, '--' if terminal == 'gnome-terminal' else '-e']
-    except (OSError, subprocess.SubprocessError):
-        pass
-    return ['gnome-terminal', '--']
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        reply = bus.call_sync('org.freedesktop.DBus', '/org/freedesktop/DBus',
+                              'org.freedesktop.DBus', 'NameHasOwner',
+                              GLib.Variant('(s)', ('org.kde.StatusNotifierWatcher',)),
+                              GLib.VariantType('(b)'), Gio.DBusCallFlags.NONE, 2000, None)
+        return reply.unpack()[0]
+    except GLib.Error:
+        return False
 
 
 def color_dot_pixbuf(hex_color, size=16):
@@ -2169,30 +2220,34 @@ class SSHTunnelIndicator:
 
 
 def main():
-    # Check if we should run with indicator (default)
     import sys
 
-    use_indicator = True
-    if '--no-indicator' in sys.argv:
-        use_indicator = False
+    signal.signal(signal.SIGINT, signal.SIG_DFL)  # Allow Ctrl+C to quit
+
+    use_indicator = '--no-indicator' not in sys.argv
+    reason = ''
+    if use_indicator and AppIndicator3 is None:
+        use_indicator, reason = False, "no AppIndicator library installed"
+    elif use_indicator and not tray_available():
+        use_indicator, reason = False, "no system tray found"
 
     if use_indicator:
         try:
             # Run with system tray indicator
             indicator = SSHTunnelIndicator()
-            signal.signal(signal.SIGINT, signal.SIG_DFL)  # Allow Ctrl+C to quit
             Gtk.main()
+            return
         except Exception as e:
-            print(f"Failed to start with indicator: {e}")
-            print("Falling back to window mode...")
-            app = EasySSHTunnelApp()
-            app.show_all()
-            Gtk.main()
-    else:
-        # Run without indicator (just the window)
-        app = EasySSHTunnelApp()
-        app.show_all()
-        Gtk.main()
+            reason = f"tray failed: {e}"
+
+    # Window mode: closing the window quits the app
+    app = EasySSHTunnelApp()
+    app.show_all()
+    if reason:
+        print(f"Running without tray icon: {reason}")
+        app.show_message(f"Running without tray icon ({reason}). On GNOME, enable the "
+                         "AppIndicator extension to get one; closing this window quits the app.")
+    Gtk.main()
 
 
 if __name__ == '__main__':

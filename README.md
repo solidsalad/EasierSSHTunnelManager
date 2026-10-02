@@ -74,81 +74,76 @@
 
 ## Requirements
 
-- Python 3.6+
-- GTK3
-- PyGObject
-- AppIndicator3
+- Python 3.6+ with PyGObject and pycairo
+- GTK 3 GObject introspection
+- AyatanaAppIndicator3 or AppIndicator3 introspection, for the tray icon (optional: without it the app runs as a window)
 - OpenSSH client
+- `ss` from iproute2, for status and port detection
 
 ## Installation
 
-### Quick Setup (Ubuntu/Debian)
+### Install with install.sh (recommended)
 
 ```bash
-# Clone the repository
 git clone https://github.com/solidsalad/EasierSSHTunnelManager.git
-cd EasierSSHTunnelManager
-
-# Install system dependencies
-sudo apt-get update
-sudo apt-get install python3 python3-gi python3-gi-cairo gir1.2-gtk-3.0 gir1.2-appindicator3-0.1
-# Ubuntu 24.04 ships the Ayatana fork instead; the app uses it when AppIndicator3 is missing:
-# sudo apt-get install gir1.2-ayatanaappindicator3-0.1
-
-# Make the script executable
-chmod +x easier_ssh_tunnel.py
-
-# Run the application
-./easier_ssh_tunnel.py
-```
-
-The application will start in system tray mode. Look for the network server icon in your top bar!
-
-### System-Wide Installation (Optional)
-
-For system-wide installation and desktop menu integration:
-
-```bash
 cd EasierSSHTunnelManager
 sudo ./install.sh
 ```
 
-This will:
-- Install all required dependencies
-- Copy the script to `/usr/local/bin/`
-- Create a desktop entry for the applications menu
-- Enable the application to run from anywhere with `easier_ssh_tunnel.py`
+install.sh detects the package manager (apt, dnf, pacman or zypper) and:
+- installs the dependencies listed below for your distribution
+- copies the app to `/usr/local/bin/easier_ssh_tunnel.py` and the icons to `/usr/local/share/easier-ssh-tunnel/`
+- adds "Easier SSH Tunnel Manager" to the applications menu
+- on GNOME without tray support, installs the AppIndicator extension where the distribution packages it and prints how to enable it
+- asks whether to start the app at login
 
-After installation, you can launch it from the Gnome applications menu or add it to startup applications.
+### Dependencies per distribution
 
-### Updating to Latest Version
+| Distribution | Command |
+|---|---|
+| Ubuntu 22.04+, Debian 12+, Linux Mint, Pop!_OS | `sudo apt-get install python3 python3-gi python3-gi-cairo gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1 iproute2 openssh-client` |
+| Fedora (RHEL, Rocky, Alma: enable EPEL first) | `sudo dnf install python3 python3-gobject python3-cairo gobject-introspection gtk3 libayatana-appindicator-gtk3 iproute openssh-clients` |
+| Arch Linux, Manjaro, EndeavourOS | `sudo pacman -S --needed python python-gobject python-cairo gtk3 libayatana-appindicator iproute2 openssh` |
+| openSUSE Tumbleweed, Leap | `sudo zypper install python3 python3-gobject python3-gobject-cairo python3-gobject-Gdk typelib-1_0-Gtk-3_0 typelib-1_0-AyatanaAppIndicator3-0_1 iproute2 openssh-clients` |
 
-If you're updating from a previous version:
+On older Debian and Ubuntu releases without the Ayatana package, use `gir1.2-appindicator3-0.1` instead.
+
+install.sh was tested on 2026-10-02 in containers of Ubuntu 24.04, Debian 12, Fedora (latest), Arch Linux (latest) and openSUSE Tumbleweed: dependencies install, the app starts under a virtual display, falls back to window mode without a tray, and reports ssh errors. The tray icon itself was tested on Ubuntu 24.04 GNOME.
+
+### Tray icon per desktop
+
+| Desktop | Tray icon |
+|---|---|
+| KDE Plasma, Cinnamon, Xfce 4.16+ | built in |
+| GNOME on Ubuntu | works out of the box (Ubuntu AppIndicators extension) |
+| GNOME on Fedora, Debian, Arch, openSUSE | needs the "AppIndicator and KStatusNotifierItem Support" extension, see below |
+
+Enable the GNOME extension after installing it (install.sh installs the package on Fedora, Debian and Arch; on openSUSE get it from [extensions.gnome.org](https://extensions.gnome.org/extension/615/appindicator-support/)), then log out and back in:
+
+```bash
+gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com
+```
+
+When no tray is available the app opens its window instead of hiding in the tray, and closing the window quits it.
+
+### Run without installing
+
+After installing the dependencies for your distribution:
 
 ```bash
 cd EasierSSHTunnelManager
-
-# Pull latest changes (if using git)
-git pull
-
-# Install any new dependencies (especially AppIndicator3 for system tray)
-sudo apt-get install gir1.2-appindicator3-0.1
-
-# Make executable
-chmod +x easier_ssh_tunnel.py
-
-# Test the application
 ./easier_ssh_tunnel.py
 ```
 
-Your existing tunnel configurations in `~/.config/easier-ssh-tunnel/tunnels.json` will be preserved.
+### Updating to Latest Version
 
-### On other Linux distributions
+```bash
+cd EasierSSHTunnelManager
+git pull
+sudo ./install.sh
+```
 
-Install the equivalent packages for your distribution:
-- Python 3.6+
-- GTK3 GObject introspection bindings
-- AppIndicator3 GObject introspection bindings (for system tray support)
+Your tunnel configurations in `~/.config/easier-ssh-tunnel/tunnels.json` are kept.
 
 ## Usage
 
@@ -308,18 +303,12 @@ The application will now start in the system tray on login.
 - Check SSH server logs for errors
 
 ### System tray icon doesn't appear
-- Make sure AppIndicator3 is installed: `sudo apt-get install gir1.2-appindicator3-0.1`, or on Ubuntu 24.04 `gir1.2-ayatanaappindicator3-0.1`
-- Some Gnome versions may need the "AppIndicator Support" or "Ubuntu AppIndicators" extension
-- Check if your desktop environment supports system tray/AppIndicator
-- Try running with `--no-indicator` flag to use window mode as fallback
+- On GNOME outside Ubuntu, install and enable the AppIndicator extension, see [Tray icon per desktop](#tray-icon-per-desktop)
+- Check that the indicator library is installed: `gir1.2-ayatanaappindicator3-0.1` (Debian/Ubuntu), `libayatana-appindicator-gtk3` (Fedora), `libayatana-appindicator` (Arch), `typelib-1_0-AyatanaAppIndicator3-0_1` (openSUSE)
+- Without a tray the app opens its window; the status bar says why
 
-### AppIndicator3 import error
-If you get an error about AppIndicator3:
-```bash
-sudo apt-get install gir1.2-appindicator3-0.1
-```
-
-The application will automatically fall back to window mode if AppIndicator3 is not available.
+### Terminal button opens the wrong terminal
+The app uses `$TERMINAL` when set, then `x-terminal-emulator` (Debian/Ubuntu) or `xdg-terminal-exec`, then the desktop's own terminal (Ptyxis, GNOME Console, GNOME Terminal, Konsole, Xfce Terminal, MATE Terminal, ...). Set `TERMINAL` in your session to pick another one.
 
 ## Contributing
 
