@@ -19,6 +19,7 @@ from gi.repository import Gtk, Gdk, Gio, GLib, GObject, Pango
 import cairo
 import subprocess
 import json
+import math
 import os
 import shutil
 import signal
@@ -57,6 +58,218 @@ def normalize_hex(value):
     """Return '#rrggbb' for a valid hex color, else None"""
     match = HEX_RE.match((value or '').strip())
     return f"#{match.group(1).lower()}" if match else None
+
+
+def _srgb_to_linear(c):
+    c /= 255
+    return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+
+def _linear_to_srgb(c):
+    c = max(0.0, min(1.0, c))
+    return 255 * (12.92 * c if c <= 0.0031308 else 1.055 * c ** (1 / 2.4) - 0.055)
+
+
+def hex_to_oklch(hex_color):
+    """'#rrggbb' -> (lightness 0-1, chroma, hue in degrees) in the OKLCH color space"""
+    value = normalize_hex(hex_color) or COLOR_DIM
+    r, g, b = (_srgb_to_linear(int(value[i:i + 2], 16)) for i in (1, 3, 5))
+    l = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b) ** (1 / 3)
+    m = (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b) ** (1 / 3)
+    s = (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b) ** (1 / 3)
+    lightness = 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s
+    a = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s
+    b2 = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s
+    return lightness, math.hypot(a, b2), math.degrees(math.atan2(b2, a)) % 360
+
+
+def oklch_to_hex(lightness, chroma, hue):
+    """OKLCH -> '#rrggbb'; chroma is reduced until the color fits in sRGB"""
+    for _ in range(60):
+        a = chroma * math.cos(math.radians(hue))
+        b = chroma * math.sin(math.radians(hue))
+        l = (lightness + 0.3963377774 * a + 0.2158037573 * b) ** 3
+        m = (lightness - 0.1055613458 * a - 0.0638541728 * b) ** 3
+        s = (lightness - 0.0894841775 * a - 1.2914855480 * b) ** 3
+        rgb = (4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+               -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+               -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s)
+        if all(-1e-4 <= c <= 1 + 1e-4 for c in rgb):
+            break
+        chroma *= 0.95
+    return "#" + "".join(f"{round(_linear_to_srgb(c)):02x}" for c in rgb)
+
+
+# 5 shades: 2 tints, the middle, 2 darker shades. How far each tint is toward almost white,
+# and each darker shade toward almost black (the ends themselves are not offered)
+LIGHT_STEPS = [0.58, 0.3]
+DARK_STEPS = [0.3, 0.56]
+SHADE_COUNT = len(LIGHT_STEPS) + 1 + len(DARK_STEPS)
+# Lightness gaps from the middle for muted colors, about those of a typical vivid row
+MUTED_OFFSETS = [0.15, 0.08, 0.0, -0.15, -0.28]
+MIDDLE_TINT = len(LIGHT_STEPS)
+WHITE_LIGHTNESS, BLACK_LIGHTNESS = 0.97, 0.22
+
+# Hue shifting: lighter shades turn slightly toward yellow, darker ones toward purple, by at
+# most these many degrees, reached three steps away from the middle
+LIGHT_HUE, DARK_HUE = 100.0, 300.0
+LIGHT_SHIFT, DARK_SHIFT = 11.0, 7.7
+
+
+def _shifted_hue(hue, delta):
+    target, limit = (LIGHT_HUE, LIGHT_SHIFT) if delta > 0 else (DARK_HUE, DARK_SHIFT)
+    diff = (target - hue + 180) % 360 - 180
+    amount = min(1.0, abs(delta) / 0.25) * limit
+    return (hue + max(-amount, min(amount, diff))) % 360
+
+
+def _in_gamut(lightness, chroma, hue):
+    a = chroma * math.cos(math.radians(hue))
+    b = chroma * math.sin(math.radians(hue))
+    l = (lightness + 0.3963377774 * a + 0.2158037573 * b) ** 3
+    m = (lightness - 0.1055613458 * a - 0.0638541728 * b) ** 3
+    s = (lightness - 0.0894841775 * a - 1.2914855480 * b) ** 3
+    rgb = (4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+           -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+           -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s)
+    return all(-1e-4 <= c <= 1 + 1e-4 for c in rgb)
+
+
+def _max_chroma(lightness, hue):
+    """Highest chroma the screen can show at this lightness and hue"""
+    low, high = 0.0, 0.4
+    for _ in range(24):
+        mid = (low + high) / 2
+        low, high = (mid, high) if _in_gamut(lightness, mid, hue) else (low, mid)
+    return low
+
+
+def _preset_lightness(hue):
+    """Lightness of the theme preset closest in hue"""
+    def distance(color):
+        diff = abs(hex_to_oklch(color)[2] - hue)
+        return min(diff, 360 - diff)
+    return hex_to_oklch(min(BASE_COLORS, key=distance))[0]
+
+
+def tint_row(color):
+    """5 shades of a color, from light to dark. The middle tile (index 2) is the
+    most vibrant one: a vivid color is the middle itself; for a muted color the middle has the
+    same hue at a typical lightness, about as vibrant as the color, and the color itself takes
+    the tile matching its lightness."""
+    color = normalize_hex(color)
+    lightness, chroma, hue = hex_to_oklch(color)
+    vivid = chroma >= 0.08 and chroma >= 0.8 * _max_chroma(lightness, hue)
+    if vivid:
+        mid_light, mid_chroma = lightness, chroma
+    else:
+        mid_light = (lightness + _preset_lightness(hue)) / 2
+        gain = _max_chroma(mid_light, hue) / max(_max_chroma(lightness, hue), 1e-6)
+        mid_chroma = chroma * max(1.0, min(1.25, gain))
+    if vivid:
+        levels = ([mid_light + (WHITE_LIGHTNESS - mid_light) * t for t in LIGHT_STEPS] + [mid_light]
+                  + [mid_light - (mid_light - BLACK_LIGHTNESS) * t for t in DARK_STEPS])
+    else:
+        # Fixed gaps around the middle; the window moves as a whole: first to stay on screen,
+        # then so a color lighter than the top (or darker than the bottom) becomes the new
+        # ceiling (or floor)
+        levels = [mid_light + offset for offset in MUTED_OFFSETS]
+        shift = 0.0
+        if levels[0] > max(lightness, WHITE_LIGHTNESS):
+            shift = max(lightness, WHITE_LIGHTNESS) - levels[0]
+        elif levels[-1] < min(lightness, 0.2):
+            shift = min(lightness, 0.2) - levels[-1]
+        levels = [level + shift for level in levels]
+        if lightness > levels[0]:
+            shift = lightness - levels[0]
+        elif lightness < levels[-1]:
+            shift = lightness - levels[-1]
+        else:
+            shift = 0.0
+        levels = [level + shift for level in levels]
+        mid_light = levels[MIDDLE_TINT]
+    fades = ([1 - 0.85 * t ** 1.6 for t in LIGHT_STEPS] + [1.0]
+             + [1 - 0.5 * t ** 2 for t in DARK_STEPS])
+    row = [oklch_to_hex(level, mid_chroma * fade, _shifted_hue(hue, level - mid_light))
+           for level, fade in zip(levels, fades)]
+    slot = MIDDLE_TINT if vivid else min(range(len(levels)), key=lambda i: abs(levels[i] - lightness))
+    row[slot] = color
+    return row
+
+
+class ColorMemory:
+    """Your colors, recent colors and the shade rows they belong to, in colors.json"""
+
+    MAX_RECENT = 12
+    MAX_MINE = 11
+    MAX_ROWS = 200
+
+    def __init__(self, config_dir):
+        self.path = Path(config_dir) / 'colors.json'
+        try:
+            with open(self.path) as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            data = {}
+        self.recent = data.get('recent', [])
+        self.rows = data.get('rows', [])
+        # Your colors always shows the middle shade of each row, so the list is not a mix of
+        # light and dark tints
+        self.mine = []
+        for color in data.get('mine', []):
+            middle = self.row_for(color)[MIDDLE_TINT]
+            if middle not in self.mine:
+                self.mine.append(middle)
+
+    def _save(self):
+        try:
+            with open(self.path, 'w') as f:
+                json.dump({'recent': self.recent, 'mine': self.mine, 'rows': self.rows}, f, indent=2)
+        except OSError as e:
+            print(f"Error saving colors: {e}")
+
+    def row_for(self, color):
+        """The saved shade row that contains color, else a new one around it"""
+        color = normalize_hex(color)
+        for row in self.rows:
+            if color in row:
+                return list(row)
+        return tint_row(color)
+
+    def _keep_row(self, row):
+        if row in self.rows:
+            self.rows.remove(row)
+        self.rows = ([row] + self.rows)[:self.MAX_ROWS]
+
+    def add_mine(self, color):
+        """A custom color for Your colors, shown as the middle shade of its row"""
+        row = self.row_for(color)
+        self._keep_row(row)
+        middle = row[MIDDLE_TINT]
+        self.mine = ([c for c in self.mine if c != middle] + [middle])[-self.MAX_MINE:]
+        self._save()
+
+    def remember(self, color, row):
+        """After a save: the exact color goes to Recent, the row's middle shade to Your colors"""
+        color = normalize_hex(color)
+        if not color:
+            return
+        if not row or color not in row:
+            row = self.row_for(color)
+        self._keep_row(row)
+        self.recent = ([color] + [c for c in self.recent if c != color])[:self.MAX_RECENT]
+        if not any(c in row for c in self.mine):
+            self.mine = (self.mine + [row[MIDDLE_TINT]])[-self.MAX_MINE:]
+        self._save()
+
+
+# Theme presets: 30 hues 12 degrees apart (OKLCH), so no preset is a shade of another,
+# at 94% of full chroma so the middle of a shade row is not overly loud
+BASE_COLORS = ["#b45ef4", "#9869f4", "#7e73f5", "#657ef5", "#4b8cf5", "#2f9ef6",
+               "#2dadea", "#2fb8e1", "#33c1d9", "#37cbd2", "#3ad5ca", "#3cdfbe",
+               "#3ce6a9", "#43ed84", "#6df745", "#b0ef3a", "#d8ea38", "#f3e343",
+               "#fcd03b", "#fab839", "#f8a335", "#fb8925", "#f96d23", "#f6573d",
+               "#f93f55", "#f93275", "#f72b95", "#eb34b4", "#dd3fd0", "#cc4ae9"]
 
 
 def tunnel_port(config):
@@ -746,10 +959,281 @@ class CellRendererSwitch(Gtk.CellRenderer):
         return True
 
 
+class Swatch(Gtk.DrawingArea):
+    """Clickable color circle or tile with a ring when selected"""
+
+    def __init__(self, color, shape='circle', width=40, height=40, on_click=None,
+                 on_double_click=None, plus=False):
+        super().__init__()
+        self.color, self.shape, self.plus = color, shape, plus
+        self.selected = self.hover = False
+        self.on_click, self.on_double_click = on_click, on_double_click
+        self.set_size_request(width, height)
+        self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.ENTER_NOTIFY_MASK
+                        | Gdk.EventMask.LEAVE_NOTIFY_MASK)
+        self.connect("draw", self._draw)
+        self.connect("button-press-event", self._pressed)
+        self.connect("enter-notify-event", lambda *_: self._set_hover(True))
+        self.connect("leave-notify-event", lambda *_: self._set_hover(False))
+        self.connect("realize", lambda w: w.get_window().set_cursor(
+            Gdk.Cursor.new_from_name(w.get_display(), "pointer")))
+        if color and not plus:
+            self.set_tooltip_text(color)
+
+    def set_color(self, color):
+        self.color = color
+        self.set_tooltip_text(color)
+        self.queue_draw()
+
+    def set_selected(self, selected):
+        if selected != self.selected:
+            self.selected = selected
+            self.queue_draw()
+
+    def _set_hover(self, hover):
+        self.hover = hover
+        self.queue_draw()
+
+    def _pressed(self, widget, event):
+        if event.button != 1:
+            return False
+        if event.type == Gdk.EventType._2BUTTON_PRESS and self.on_double_click:
+            self.on_double_click(self.color)
+        elif event.type == Gdk.EventType.BUTTON_PRESS and self.on_click:
+            self.on_click(self.color)
+        return True
+
+    def _shape(self, cr, inset):
+        width, height = self.get_allocated_width(), self.get_allocated_height()
+        if self.shape == 'circle':
+            radius = min(width, height) / 2 - inset
+            cr.arc(width / 2, height / 2, radius, 0, 6.2832)
+            return
+        radius = 10
+        x, y, w, h = inset, inset, width - 2 * inset, height - 2 * inset
+        cr.new_sub_path()
+        cr.arc(x + w - radius, y + radius, radius, -1.5708, 0)
+        cr.arc(x + w - radius, y + h - radius, radius, 0, 1.5708)
+        cr.arc(x + radius, y + h - radius, radius, 1.5708, 3.1416)
+        cr.arc(x + radius, y + radius, radius, 3.1416, 4.7124)
+        cr.close_path()
+
+    def _draw(self, widget, cr):
+        rgba = Gdk.RGBA()
+        rgba.parse("#a3a6ad" if self.plus else (normalize_hex(self.color) or COLOR_DIM))
+        # Circles leave a dark gap between fill and ring, tiles get a frame on the edge
+        self._shape(cr, 6 if self.shape == 'circle' else 3)
+        cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, 1)
+        cr.fill()
+        if self.plus:
+            width, height = self.get_allocated_width(), self.get_allocated_height()
+            cr.set_source_rgb(0.13, 0.13, 0.15)
+            cr.set_line_width(2.5)
+            arm = min(width, height) / 5
+            cr.move_to(width / 2 - arm, height / 2)
+            cr.line_to(width / 2 + arm, height / 2)
+            cr.move_to(width / 2, height / 2 - arm)
+            cr.line_to(width / 2, height / 2 + arm)
+            cr.stroke()
+        if self.selected or self.hover:
+            line = 3 if self.selected else 2
+            self._shape(cr, line / 2)
+            cr.set_source_rgba(1, 1, 1, 1 if self.selected else 0.35)
+            cr.set_line_width(line)
+            cr.stroke()
+        return True
+
+
+class ColorPickerDialog(Gtk.Dialog):
+    """Theme presets, your colors and recent colors on the left; shades of the pick on the right"""
+
+    COLUMNS = 6
+
+    def __init__(self, parent, color, row, memory):
+        super().__init__(title="Pick a Color", transient_for=parent, modal=True, use_header_bar=True)
+        self.get_style_context().add_class("color-picker")
+        self.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        self.memory = memory
+        self.color = normalize_hex(color) or BASE_COLORS[0]
+        self.row = list(row) if row and self.color in row else memory.row_for(self.color)
+        self.swatches = []
+
+        content = self.get_content_area()
+        content.set_border_width(22)
+        # Grid: sections on the left; shades next to presets and your colors; the hex value
+        # and Select next to the two rows of recent colors
+        layout = Gtk.Grid(column_spacing=32, row_spacing=12)
+        content.pack_start(layout, True, True, 0)
+
+        layout.attach(self._title("THEME PRESETS"), 0, 0, 1, 1)
+        layout.attach(self._grid(BASE_COLORS, keep_slot=True), 0, 1, 1, 1)
+        mine_title = self._title("YOUR COLORS")
+        mine_title.set_margin_top(12)
+        layout.attach(mine_title, 0, 2, 1, 1)
+        self.mine_holder = Gtk.Box()
+        layout.attach(self.mine_holder, 0, 3, 1, 1)
+        recent_title = self._title("RECENT")
+        recent_title.set_margin_top(12)
+        layout.attach(recent_title, 0, 4, 1, 1)
+        recent = self._grid(memory.recent, empty="Colors you save on a tunnel show up here")
+        # Room for two rows, also while there are fewer recent colors
+        recent.set_size_request(-1, 2 * 46 + 8)
+        layout.attach(recent, 0, 5, 1, 1)
+        self._fill_mine()
+
+        shades = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, homogeneous=True)
+        layout.attach(shades, 1, 0, 1, 5)
+        self.tiles = []
+        for _ in range(SHADE_COUNT):
+            tile = Swatch(None, shape='tile', width=168, height=40,
+                          on_click=lambda c: self.choose(c, keep_row=True),
+                          on_double_click=self._choose_and_close)
+            shades.pack_start(tile, True, True, 0)
+            self.tiles.append(tile)
+
+        # Hex value of the selection, editable, and Select
+        actions = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        actions.set_valign(Gtk.Align.START)
+        layout.attach(actions, 1, 5, 1, 1)
+        self.hex_entry = Gtk.Entry()
+        self.hex_entry.get_style_context().add_class("hex-entry")
+        self.hex_entry.set_width_chars(9)
+        self.hex_entry.set_alignment(0.5)
+        self.hex_entry.connect("changed", self.on_hex_typed)
+        self.hex_entry.connect("activate", lambda _e: self.response(Gtk.ResponseType.OK))
+        actions.pack_start(self.hex_entry, False, False, 0)
+        select = Gtk.Button(label="Select")
+        select.get_style_context().add_class("suggested-action")
+        select.get_style_context().add_class("select-button")
+        select.connect("clicked", lambda _b: self.response(Gtk.ResponseType.OK))
+        actions.pack_start(select, False, False, 0)
+        self.choose(self.color, keep_row=True)
+        # Focus Select once the window is shown, so a keypress does not overwrite the hex value
+        self.connect("map", lambda *_: GLib.idle_add(self._focus_select, select))
+        self.show_all()
+
+    def _focus_select(self, select):
+        select.grab_focus()
+        self.hex_entry.set_position(-1)
+        return False
+
+    @staticmethod
+    def _title(text):
+        label = Gtk.Label(xalign=0)
+        label.set_markup(f'<span size="11000" weight="600" letter_spacing="2200" '
+                         f'foreground="#9da0a8">{text}</span>')
+        return label
+
+    def _grid(self, colors, plus=False, empty=None, keep_slot=False):
+        """Swatch grid. keep_slot: clicking switches to that color's shades but stays on the
+        same tile (presets and your colors); otherwise the exact color is selected (recent)"""
+        grid = Gtk.Grid(row_spacing=8, column_spacing=10)
+        items = list(colors) + (['+'] if plus else [])
+        for index, color in enumerate(items):
+            if color == '+':
+                swatch = Swatch(None, plus=True, width=46, height=46,
+                                on_click=lambda _c: self.on_add_custom())
+                swatch.set_tooltip_text("Add a custom color")
+            else:
+                if keep_slot:
+                    # Shows the shade of the selected tile, but switches by its base color
+                    swatch = Swatch(color, width=46, height=46,
+                                    on_click=lambda _c, base=color: self.choose(base, keep_slot=True),
+                                    on_double_click=lambda _c: self.response(Gtk.ResponseType.OK))
+                else:
+                    swatch = Swatch(color, width=46, height=46, on_click=self.choose,
+                                    on_double_click=self._choose_and_close)
+                swatch.keep_slot = keep_slot
+                swatch.base = color
+                self.swatches.append(swatch)
+            grid.attach(swatch, index % self.COLUMNS, index // self.COLUMNS, 1, 1)
+        if not items and empty:
+            label = Gtk.Label(label=empty, xalign=0)
+            label.get_style_context().add_class("dim-label")
+            grid.attach(label, 0, 0, self.COLUMNS, 1)
+        return grid
+
+    def _fill_mine(self):
+        for child in self.mine_holder.get_children():
+            self.swatches = [s for s in self.swatches if s.get_parent() is not child]
+            self.mine_holder.remove(child)
+        mine = self._grid(self.memory.mine, plus=True, keep_slot=True)
+        # Room for two rows: 11 colors and the + button
+        mine.set_size_request(-1, 2 * 46 + 8)
+        self.mine_holder.pack_start(mine, False, False, 0)
+        self.mine_holder.show_all()
+
+    def choose(self, color, keep_row=False, keep_slot=False):
+        """Select a color; a color from outside the current shades brings its own shade row.
+        With keep_slot the selection stays on the same tile of the new row."""
+        color = normalize_hex(color)
+        if not color:
+            return
+        slot = self.row.index(self.color) if self.color in self.row else MIDDLE_TINT
+        if not (keep_row and color in self.row):
+            self.row = self.memory.row_for(color)
+        if keep_slot:
+            color = self.row[slot]
+        self.color = color
+        for tile, shade in zip(self.tiles, self.row):
+            tile.set_color(shade)
+            tile.set_selected(shade == color)
+        slot = self.row.index(color) if color in self.row else MIDDLE_TINT
+        for swatch in self.swatches:
+            if getattr(swatch, 'keep_slot', False):
+                # Presets and your colors show their shade on the selected tile and stand for
+                # their whole row
+                swatch.set_color(self._row_of(swatch.base)[slot])
+                swatch.set_selected(swatch.base in self.row)
+            else:
+                swatch.set_selected(swatch.color == color)
+        if normalize_hex(self.hex_entry.get_text()) != color:
+            self.hex_entry.set_text(color)
+            self.hex_entry.select_region(-1, -1)
+
+    def on_hex_typed(self, entry):
+        color = normalize_hex(entry.get_text())
+        entry.get_style_context().remove_class("error")
+        if not color:
+            entry.get_style_context().add_class("error")
+        elif color != self.color:
+            self.choose(color, keep_row=True)
+
+    def _row_of(self, base):
+        cache = self.__dict__.setdefault('_row_cache', {})
+        if base not in cache:
+            cache[base] = self.memory.row_for(base)
+        return cache[base]
+
+    def _choose_and_close(self, color):
+        self.choose(color, keep_row=True)
+        self.response(Gtk.ResponseType.OK)
+
+    def on_add_custom(self):
+        """GTK's color editor for a custom color, added to Your colors"""
+        chooser = Gtk.ColorChooserDialog(title="Custom Color", transient_for=self)
+        chooser.set_use_alpha(False)
+        chooser.set_property("show-editor", True)
+        rgba = Gdk.RGBA()
+        rgba.parse(self.color)
+        chooser.set_rgba(rgba)
+        if chooser.run() == Gtk.ResponseType.OK:
+            picked = chooser.get_rgba()
+            color = "#{:02x}{:02x}{:02x}".format(
+                round(picked.red * 255), round(picked.green * 255), round(picked.blue * 255))
+            self.memory.add_mine(color)
+            self._fill_mine()
+            self.choose(color)
+        chooser.destroy()
+
+    def result(self):
+        return self.color, list(self.row)
+
+
 class TunnelDialog(Gtk.Dialog):
     """Dialog for adding/editing SSH tunnel configurations"""
 
-    def __init__(self, parent, tunnel_data=None):
+    def __init__(self, parent, tunnel_data=None, color_memory=None, tint_row_hint=None):
         super().__init__(title="SSH Tunnel Configuration", parent=parent)
         self.add_buttons(
             Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
@@ -769,13 +1253,16 @@ class TunnelDialog(Gtk.Dialog):
         self.name_entry = Gtk.Entry()
         box.pack_start(self.name_entry, False, False, 0)
 
-        # Tunnel color: picker and hex entry kept in sync
+        # Tunnel color: a tile that opens the color picker, and the hex value
         box.pack_start(Gtk.Label(label="Color:", xalign=0), False, False, 6)
-        color_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        self.color_button = Gtk.ColorButton()
-        self.color_button.set_use_alpha(False)
-        self.color_button.connect("color-set", self.on_color_picked)
-        color_box.pack_start(self.color_button, False, False, 0)
+        color_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.color_memory = color_memory or ColorMemory(Path.home() / '.config' / APP_ID)
+        self.tint_row = list(tint_row_hint or [])
+        self._tint_row_hint = list(self.tint_row)
+        self.color_swatch = Swatch(TUNNEL_PALETTE[0], shape='tile', width=64, height=38,
+                                   on_click=lambda _c: self.open_color_picker())
+        self.color_swatch.set_tooltip_text("Pick a color")
+        color_box.pack_start(self.color_swatch, False, False, 0)
         self.color_entry = Gtk.Entry()
         self.color_entry.set_placeholder_text("#7eb26d")
         self.color_entry.set_width_chars(10)
@@ -900,22 +1387,29 @@ class TunnelDialog(Gtk.Dialog):
         self.color_entry.set_text(hex_color)
         self.on_color_typed(self.color_entry)
 
-    def on_color_picked(self, button):
-        rgba = button.get_rgba()
-        hex_color = "#{:02x}{:02x}{:02x}".format(
-            round(rgba.red * 255), round(rgba.green * 255), round(rgba.blue * 255))
-        if normalize_hex(self.color_entry.get_text()) != hex_color:
-            self.color_entry.set_text(hex_color)
-
     def on_color_typed(self, entry):
         hex_color = normalize_hex(entry.get_text())
         entry.get_style_context().remove_class("error")
         if not hex_color:
             entry.get_style_context().add_class("error")
             return
-        rgba = Gdk.RGBA()
-        rgba.parse(hex_color)
-        self.color_button.set_rgba(rgba)
+        self.color_swatch.set_color(hex_color)
+        self.color_swatch.set_tooltip_text("Pick a color")
+        if hex_color not in self.tint_row:
+            if hex_color in self._tint_row_hint:
+                self.tint_row = list(self._tint_row_hint)
+            else:
+                self.tint_row = self.color_memory.row_for(hex_color)
+
+    def open_color_picker(self):
+        current = normalize_hex(self.color_entry.get_text()) or TUNNEL_PALETTE[0]
+        picker = ColorPickerDialog(self, current, self.tint_row, self.color_memory)
+        if picker.run() == Gtk.ResponseType.OK:
+            color, row = picker.result()
+            self.tint_row = row
+            self._tint_row_hint = list(row)
+            self.set_color(color)
+        picker.destroy()
 
     def load_data(self, data):
         """Load tunnel data into the form"""
@@ -1059,6 +1553,7 @@ class EasySSHTunnelApp(Gtk.Window):
         self.tunnel_manager = tunnel_manager or SSHTunnelManager()
         self.config_manager = config_manager or ConfigManager()
         self.tunnels_config = self.config_manager.load_tunnels()
+        self.color_memory = ColorMemory(self.config_manager.config_dir)
         self._install_manage_tunnel_css()
 
         # Main layout
@@ -1076,6 +1571,8 @@ class EasySSHTunnelApp(Gtk.Window):
         buttons = [
             ("Add", "list-add-symbolic", "toolbar-button-neutral", self.on_add_tunnel, None),
             ("Edit", "document-edit-symbolic", "toolbar-button-neutral", self.on_edit_tunnel, None),
+            ("Duplicate", "edit-copy-symbolic", "toolbar-button-neutral", self.on_duplicate_tunnel,
+             "Copy the selected tunnel into a new one"),
             ("Remove", "user-trash-symbolic", "toolbar-button-danger", self.on_remove_tunnel, None),
             None,
             ("Start all", "media-skip-forward-symbolic", "toolbar-button-success", self.on_start_all,
@@ -1136,15 +1633,19 @@ class EasySSHTunnelApp(Gtk.Window):
         self.tunnel_view = Gtk.TreeView(model=self.tunnel_store)
         self.tunnel_view.get_style_context().add_class("tunnel-list")
         self.tunnel_view.connect("row-activated", self.on_row_activated)
-        # Terminal needs a selected tunnel
+        self.tunnel_view.connect("button-press-event", self.on_list_button_press)
+        self._selected_at = 0.0
+        self._pending_toggle = None
+        # Terminal and Duplicate need a selected tunnel
         self.tunnel_view.get_selection().connect("changed", self.on_selection_changed)
         self.toolbar_buttons["Terminal"].set_sensitive(False)
+        self.toolbar_buttons["Duplicate"].set_sensitive(False)
 
         # On/off switch per row
         renderer = CellRendererSwitch()
         renderer.connect("toggled", self.on_switch_toggled)
-        column = Gtk.TreeViewColumn("", renderer, active=8)
-        self.tunnel_view.append_column(column)
+        self.switch_column = Gtk.TreeViewColumn("", renderer, active=8)
+        self.tunnel_view.append_column(self.switch_column)
 
         renderer = Gtk.CellRendererText()
         renderer.set_property("text", "●")
@@ -1257,6 +1758,49 @@ class EasySSHTunnelApp(Gtk.Window):
             background: #1f2a3a;
             color: @text_primary;
             border: none;
+        }
+
+        button.suggested-action {
+            background: #2f7d32;
+            border-color: #2a6b2d;
+            color: #ffffff;
+        }
+
+        button.suggested-action:hover {
+            background: #388e3c;
+        }
+
+        button.select-button {
+            background: #16913a;
+            border-color: #127a30;
+            padding: 12px 24px;
+            font-size: 17px;
+            border-radius: 10px;
+        }
+
+        button.select-button label {
+            font-size: 20px;
+        }
+
+        button.select-button:hover {
+            background: #19a442;
+        }
+
+        .color-picker headerbar button {
+            background: transparent;
+            border-color: transparent;
+            box-shadow: none;
+        }
+
+        .color-picker headerbar button:hover {
+            background: @bg_secondary;
+        }
+
+        entry.hex-entry {
+            font-family: monospace;
+            font-size: 15px;
+            padding: 8px 10px;
+            border-radius: 8px;
         }
 
         statusbar {
@@ -1449,25 +1993,88 @@ class EasySSHTunnelApp(Gtk.Window):
             self.on_start_tunnel(None)
 
     def on_row_activated(self, view, path, column):
-        """Double-click toggles a tunnel"""
-        if self.tunnel_store[path][8]:
-            self.on_stop_tunnel(None)
-        else:
-            self.on_start_tunnel(None)
+        """Double-click (or Enter) opens the tunnel in Edit; the switch column has its own clicks"""
+        self._cancel_pending_toggle()
+        if column is not self.switch_column:
+            self.tunnel_view.get_selection().select_path(path)
+            self.on_edit_tunnel(None)
 
-    def on_add_tunnel(self, widget, prefill=None):
+    def _cancel_pending_toggle(self):
+        if self._pending_toggle:
+            GLib.source_remove(self._pending_toggle)
+            self._pending_toggle = None
+
+    def on_list_button_press(self, view, event):
+        """A single click on a row that was already selected (over half a second ago) toggles it"""
+        if event.button != 1:
+            return False
+        if event.type != Gdk.EventType.BUTTON_PRESS:
+            # Second click of a double-click: row-activated opens Edit instead
+            self._cancel_pending_toggle()
+            return False
+        hit = view.get_path_at_pos(int(event.x), int(event.y))
+        if not hit or hit[1] is self.switch_column:
+            return False
+        selected = self._selected_config()
+        clicked = self.tunnel_store[hit[0]][7]
+        if (selected is not None and selected.get('id') == clicked.get('id')
+                and time.monotonic() - self._selected_at > 0.5):
+            # Wait out the double-click time, so a double-click edits instead of toggling
+            self._cancel_pending_toggle()
+            delay = Gtk.Settings.get_default().get_property("gtk-double-click-time")
+            self._pending_toggle = GLib.timeout_add(delay, self._toggle_after_click, clicked.get('id'))
+        return False
+
+    def _toggle_after_click(self, tunnel_id):
+        self._pending_toggle = None
+        selected = self._selected_config()
+        if selected and selected.get('id') == tunnel_id:
+            path = next(row.path for row in self.tunnel_store if row[7].get('id') == tunnel_id)
+            self.on_switch_toggled(None, path)
+        return False
+
+    def on_add_tunnel(self, widget, prefill=None, tint_row_hint=None):
         """Add a new tunnel configuration"""
-        dialog = TunnelDialog(self, prefill)
+        dialog = TunnelDialog(self, prefill, self.color_memory, tint_row_hint)
         if not prefill or not prefill.get('color'):
             dialog.set_color(ConfigManager.new_tunnel_fields(self.tunnels_config)['color'])
         if dialog.run_until_valid() == Gtk.ResponseType.OK:
             data = dialog.get_data()
             data['id'] = ConfigManager.new_tunnel_fields(self.tunnels_config)['id']
+            self.color_memory.remember(data['color'], dialog.tint_row)
             self.tunnels_config.append(data)
             self._tunnels_changed()
             self.show_message("Tunnel configuration added")
 
         dialog.destroy()
+
+    def _next_free_port(self, port):
+        """port, or the first higher one not used by a tunnel or a listening socket"""
+        try:
+            candidate = int(port)
+        except (TypeError, ValueError):
+            return port
+        used = {tunnel_port(c) for c in self.tunnels_config} | set(self.tunnel_manager.scanner.listeners())
+        while str(candidate) in used and candidate < 65535:
+            candidate += 1
+        return str(candidate)
+
+    def on_duplicate_tunnel(self, widget):
+        """Open Add prefilled with the selected tunnel, a free port and a lighter or darker color"""
+        config = self._selected_config()
+        if not config:
+            return
+        copy = json.loads(json.dumps(config))
+        copy.pop('id', None)
+        copy['name'] = f"{config.get('name', '')} (copy)"
+        if copy.get('type') != 'remote' and not copy.get('forwards'):
+            copy['local_port'] = self._next_free_port(copy.get('local_port'))
+        base = normalize_hex(config.get('color')) or TUNNEL_PALETTE[0]
+        row = self.color_memory.row_for(base)
+        # The neighbouring tint in the same row: darker for the light half, lighter for the dark half
+        slot = row.index(base)
+        copy['color'] = row[slot + 1] if slot < MIDDLE_TINT + 1 else row[slot - 1]
+        self.on_add_tunnel(None, prefill=copy, tint_row_hint=row)
 
     def on_edit_tunnel(self, widget):
         """Edit selected tunnel; a running tunnel is restarted with the new settings"""
@@ -1476,9 +2083,10 @@ class EasySSHTunnelApp(Gtk.Window):
             self.show_error("Please select a tunnel to edit")
             return
 
-        dialog = TunnelDialog(self, config)
+        dialog = TunnelDialog(self, config, self.color_memory)
         if dialog.run_until_valid() == Gtk.ResponseType.OK:
             new_data = dialog.get_data()
+            self.color_memory.remember(new_data['color'], dialog.tint_row)
             tunnel_id = config.get('id')
             was_running = self.tunnel_manager.is_running(tunnel_id)
             if was_running:
@@ -1613,7 +2221,12 @@ class EasySSHTunnelApp(Gtk.Window):
         self.auto_scan()
 
     def on_selection_changed(self, selection):
-        self.toolbar_buttons["Terminal"].set_sensitive(self._selected_config() is not None)
+        selected = self._selected_config()
+        if selected is None or selected.get('id') != getattr(self, '_selected_id', None):
+            self._selected_at = time.monotonic()
+            self._selected_id = selected.get('id') if selected else None
+        for name in ("Terminal", "Duplicate"):
+            self.toolbar_buttons[name].set_sensitive(selected is not None)
 
     # Choices in the dialog for Terminal on a tunnel that is not open
     TERMINAL_SESSION, TERMINAL_TUNNEL, TERMINAL_BOTH = 1, 2, 3

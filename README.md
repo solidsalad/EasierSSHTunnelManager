@@ -68,7 +68,8 @@
 
 - **User-Friendly Interface:**
   - Dark GTK3 interface
-  - A color per tunnel, picked or entered as hex, shown in the list and as a dot in the tray menu
+  - A color per tunnel, shown in the list and as a dot in the tray menu
+  - Color picker with 30 theme presets, your colors, recent colors and 5 shades of the selected color (2 tints, the color, 2 darker shades); a custom color can be added with the GTK color editor
   - Simple dialog for configuring tunnels
   - Real-time status indicators
 
@@ -180,12 +181,14 @@ The application will start minimized to the system tray. Look for the network ic
 2. Use the toolbar buttons:
    - **Add** - Create a new tunnel configuration
    - **Edit** - Modify an existing tunnel
+   - **Duplicate** - Open Add prefilled with the selected tunnel, the next free local port and a neighbouring shade of its color
    - **Remove** - Delete a tunnel configuration
    - **Start all** / **Stop all** - Start every tunnel that is not open, or stop every tunnel started by the app
    - **Start** - Activate a tunnel
    - **Stop** - Deactivate a tunnel; on a stopped tunnel this clears it to offline
    - **Terminal** - Open `ssh [user@]host` in the default terminal (`x-terminal-emulator`). Greyed out until a tunnel is selected. When the tunnel is not open, a dialog offers **Start tunnel**, **Open SSH session** or **Both**; the ssh session alone does not open the tunnel's port.
 3. The switch at the start of each row shows whether the tunnel's port is open and follows the connection: it turns off when ssh exits.
+   Double-clicking a row opens Edit. A single click on a row that is already selected toggles the tunnel.
 4. **Quit** (tray menu, or closing the window with `--no-indicator`) stops every tunnel the app started. When tunnels are running, the app asks first.
 
 ### Tunnel Status
@@ -207,7 +210,7 @@ Every 5 seconds the app looks for local ports held by `ssh` processes it did not
 1. Click the **Add** button in the toolbar
 2. Fill in the tunnel configuration:
    - **Tunnel Name**: A descriptive name for this tunnel
-   - **Color**: Pick a color or type a hex value like `#7eb26d`
+   - **Color**: Click the color to open the picker, or type a hex value like `#7eb26d`. Colors you save go to Recent, and the middle shade of their row to Your colors (stored in `~/.config/easier-ssh-tunnel/colors.json`)
    - **Tunnel Type**: Choose Local, Remote, or Dynamic
    - **SSH Connection**: User, host, and port for the SSH server. Leave User and Port empty to take them from `~/.ssh/config`; a `Host` alias from that file works as host.
    - **Tunnel Details**: Port forwarding configuration
