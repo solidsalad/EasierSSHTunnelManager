@@ -102,11 +102,11 @@ def oklch_to_hex(lightness, chroma, hue):
 
 # 5 shades: 2 tints, the middle, 2 darker shades. How far each tint is toward almost white,
 # and each darker shade toward almost black (the ends themselves are not offered)
-LIGHT_STEPS = [0.58, 0.3]
-DARK_STEPS = [0.3, 0.56]
+LIGHT_STEPS = [0.63, 0.32]
+DARK_STEPS = [0.32, 0.61]
 SHADE_COUNT = len(LIGHT_STEPS) + 1 + len(DARK_STEPS)
 # Lightness gaps from the middle for muted colors, about those of a typical vivid row
-MUTED_OFFSETS = [0.15, 0.08, 0.0, -0.15, -0.28]
+MUTED_OFFSETS = [0.165, 0.085, 0.0, -0.16, -0.305]
 MIDDLE_TINT = len(LIGHT_STEPS)
 WHITE_LIGHTNESS, BLACK_LIGHTNESS = 0.97, 0.22
 
@@ -246,8 +246,22 @@ class ColorMemory:
         row = self.row_for(color)
         self._keep_row(row)
         middle = row[MIDDLE_TINT]
-        self.mine = ([c for c in self.mine if c != middle] + [middle])[-self.MAX_MINE:]
+        self.mine = ([middle] + [c for c in self.mine if c != middle])[:self.MAX_MINE]
         self._save()
+
+    def remove_mine(self, color):
+        """Take a color out of Your colors; its shade row stays for tunnels that use it"""
+        self.mine = [c for c in self.mine if c != color]
+        self._save()
+
+    def replace_mine(self, old, color):
+        """Give an entry of Your colors a new base color, in the same place"""
+        row = self.row_for(color)
+        self._keep_row(row)
+        middle = row[MIDDLE_TINT]
+        self.mine = [middle if c == old else c for c in self.mine if c != middle or c == old]
+        self._save()
+        return middle
 
     def remember(self, color, row):
         """After a save: the exact color goes to Recent, the row's middle shade to Your colors"""
@@ -259,15 +273,15 @@ class ColorMemory:
         self._keep_row(row)
         self.recent = ([color] + [c for c in self.recent if c != color])[:self.MAX_RECENT]
         if not any(c in row for c in self.mine):
-            self.mine = (self.mine + [row[MIDDLE_TINT]])[-self.MAX_MINE:]
+            self.mine = ([row[MIDDLE_TINT]] + self.mine)[:self.MAX_MINE]
         self._save()
 
 
-# Theme presets: 30 hues 12 degrees apart (OKLCH), so no preset is a shade of another,
-# at 94% of full chroma so the middle of a shade row is not overly loud
-BASE_COLORS = ["#b45ef4", "#9869f4", "#7e73f5", "#657ef5", "#4b8cf5", "#2f9ef6",
-               "#2dadea", "#2fb8e1", "#33c1d9", "#37cbd2", "#3ad5ca", "#3cdfbe",
-               "#3ce6a9", "#43ed84", "#6df745", "#b0ef3a", "#d8ea38", "#f3e343",
+# Theme presets: hues around the color wheel at 94% of full chroma, so no preset is a shade
+# of another and the middle of a shade row is not overly loud. Presets closer than 0.049 in
+# OKLab to another one were left out, which leaves 24 clearly different colors.
+BASE_COLORS = ["#b45ef4", "#9869f4", "#657ef5", "#2f9ef6", "#2dadea", "#33c1d9",
+               "#3ad5ca", "#3ce6a9", "#43ed84", "#6df745", "#b0ef3a", "#d8ea38",
                "#fcd03b", "#fab839", "#f8a335", "#fb8925", "#f96d23", "#f6573d",
                "#f93f55", "#f93275", "#f72b95", "#eb34b4", "#dd3fd0", "#cc4ae9"]
 
@@ -968,6 +982,8 @@ class Swatch(Gtk.DrawingArea):
         self.color, self.shape, self.plus = color, shape, plus
         self.selected = self.hover = False
         self.on_click, self.on_double_click = on_click, on_double_click
+        self.badge_click = None  # set for Your colors: removes the color
+        self.show_badge = self.show_pencil = False
         self.set_size_request(width, height)
         self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.ENTER_NOTIFY_MASK
                         | Gdk.EventMask.LEAVE_NOTIFY_MASK)
@@ -994,9 +1010,21 @@ class Swatch(Gtk.DrawingArea):
         self.hover = hover
         self.queue_draw()
 
+    BADGE_CENTER, BADGE_RADIUS = 9.5, 8.5
+
+    def set_marks(self, badge, pencil):
+        if (badge, pencil) != (self.show_badge, self.show_pencil):
+            self.show_badge, self.show_pencil = badge, pencil
+            self.queue_draw()
+
     def _pressed(self, widget, event):
         if event.button != 1:
             return False
+        if (self.show_badge and self.badge_click and event.type == Gdk.EventType.BUTTON_PRESS
+                and math.hypot(event.x - self.BADGE_CENTER, event.y - self.BADGE_CENTER)
+                <= self.BADGE_RADIUS + 2):
+            self.badge_click(self.color)
+            return True
         if event.type == Gdk.EventType._2BUTTON_PRESS and self.on_double_click:
             self.on_double_click(self.color)
         elif event.type == Gdk.EventType.BUTTON_PRESS and self.on_click:
@@ -1035,11 +1063,34 @@ class Swatch(Gtk.DrawingArea):
             cr.move_to(width / 2, height / 2 - arm)
             cr.line_to(width / 2, height / 2 + arm)
             cr.stroke()
+        if self.show_pencil:
+            # The theme's edit icon, centered, in a darker shade: click again to change the color
+            width, height = self.get_allocated_width(), self.get_allocated_height()
+            shade = Gdk.RGBA()
+            shade.red, shade.green, shade.blue, shade.alpha = (
+                rgba.red * 0.45, rgba.green * 0.45, rgba.blue * 0.45, 1.0)
+            info = Gtk.IconTheme.get_default().lookup_icon("document-edit-symbolic", 18, 0)
+            if info is not None:
+                icon, _ = info.load_symbolic(shade, None, None, None)
+                Gdk.cairo_set_source_pixbuf(cr, icon, (width - icon.get_width()) / 2,
+                                            (height - icon.get_height()) / 2)
+                cr.paint()
         if self.selected or self.hover:
             line = 3 if self.selected else 2
             self._shape(cr, line / 2)
             cr.set_source_rgba(1, 1, 1, 1 if self.selected else 0.35)
             cr.set_line_width(line)
+            cr.stroke()
+        if self.show_badge:
+            # Grey minus badge in the top-left corner: removes the color
+            cr.arc(self.BADGE_CENTER, self.BADGE_CENTER, self.BADGE_RADIUS, 0, 6.2832)
+            cr.set_source_rgb(0.27, 0.28, 0.30)
+            cr.fill()
+            cr.set_source_rgb(0.85, 0.86, 0.88)
+            cr.set_line_width(2)
+            cr.set_line_cap(cairo.LINE_CAP_ROUND)
+            cr.move_to(self.BADGE_CENTER - 4, self.BADGE_CENTER)
+            cr.line_to(self.BADGE_CENTER + 4, self.BADGE_CENTER)
             cr.stroke()
         return True
 
@@ -1067,9 +1118,16 @@ class ColorPickerDialog(Gtk.Dialog):
 
         layout.attach(self._title("THEME PRESETS"), 0, 0, 1, 1)
         layout.attach(self._grid(BASE_COLORS, keep_slot=True), 0, 1, 1, 1)
-        mine_title = self._title("YOUR COLORS")
-        mine_title.set_margin_top(12)
-        layout.attach(mine_title, 0, 2, 1, 1)
+        # Removing colors only while "Edit" is on, so nothing goes by accident
+        mine_header = Gtk.Box(spacing=10)
+        mine_header.set_margin_top(12)
+        mine_header.pack_start(self._title("YOUR COLORS"), False, False, 0)
+        self.edit_toggle = Gtk.ToggleButton(label="\u2212 Edit")
+        self.edit_toggle.set_relief(Gtk.ReliefStyle.NONE)
+        self.edit_toggle.get_style_context().add_class("edit-toggle")
+        self.edit_toggle.connect("toggled", self.on_edit_toggled)
+        mine_header.pack_start(self.edit_toggle, False, False, 0)
+        layout.attach(mine_header, 0, 2, 1, 1)
         self.mine_holder = Gtk.Box()
         layout.attach(self.mine_holder, 0, 3, 1, 1)
         recent_title = self._title("RECENT")
@@ -1124,7 +1182,7 @@ class ColorPickerDialog(Gtk.Dialog):
                          f'foreground="#9da0a8">{text}</span>')
         return label
 
-    def _grid(self, colors, plus=False, empty=None, keep_slot=False):
+    def _grid(self, colors, plus=False, empty=None, keep_slot=False, mine=False):
         """Swatch grid. keep_slot: clicking switches to that color's shades but stays on the
         same tile (presets and your colors); otherwise the exact color is selected (recent)"""
         grid = Gtk.Grid(row_spacing=8, column_spacing=10)
@@ -1135,7 +1193,13 @@ class ColorPickerDialog(Gtk.Dialog):
                                 on_click=lambda _c: self.on_add_custom())
                 swatch.set_tooltip_text("Add a custom color")
             else:
-                if keep_slot:
+                if mine:
+                    # Your colors: a click switches to it, a click on the selected one edits it,
+                    # the minus badge removes it
+                    swatch = Swatch(color, width=46, height=46,
+                                    on_click=lambda _c, base=color: self.on_mine_clicked(base))
+                    swatch.badge_click = lambda _c, base=color: self.on_mine_removed(base)
+                elif keep_slot:
                     # Shows the shade of the selected tile, but switches by its base color
                     swatch = Swatch(color, width=46, height=46,
                                     on_click=lambda _c, base=color: self.choose(base, keep_slot=True),
@@ -1143,7 +1207,8 @@ class ColorPickerDialog(Gtk.Dialog):
                 else:
                     swatch = Swatch(color, width=46, height=46, on_click=self.choose,
                                     on_double_click=self._choose_and_close)
-                swatch.keep_slot = keep_slot
+                swatch.keep_slot = keep_slot or mine
+                swatch.mine = mine
                 swatch.base = color
                 self.swatches.append(swatch)
             grid.attach(swatch, index % self.COLUMNS, index // self.COLUMNS, 1, 1)
@@ -1157,7 +1222,7 @@ class ColorPickerDialog(Gtk.Dialog):
         for child in self.mine_holder.get_children():
             self.swatches = [s for s in self.swatches if s.get_parent() is not child]
             self.mine_holder.remove(child)
-        mine = self._grid(self.memory.mine, plus=True, keep_slot=True)
+        mine = self._grid(self.memory.mine, plus=True, mine=True)
         # Room for two rows: 11 colors and the + button
         mine.set_size_request(-1, 2 * 46 + 8)
         self.mine_holder.pack_start(mine, False, False, 0)
@@ -1185,6 +1250,9 @@ class ColorPickerDialog(Gtk.Dialog):
                 # their whole row
                 swatch.set_color(self._row_of(swatch.base)[slot])
                 swatch.set_selected(swatch.base in self.row)
+                if getattr(swatch, 'mine', False):
+                    editing = self.edit_toggle.get_active()
+                    swatch.set_marks(badge=editing and not swatch.selected, pencil=swatch.selected)
             else:
                 swatch.set_selected(swatch.color == color)
         if normalize_hex(self.hex_entry.get_text()) != color:
@@ -1208,6 +1276,47 @@ class ColorPickerDialog(Gtk.Dialog):
     def _choose_and_close(self, color):
         self.choose(color, keep_row=True)
         self.response(Gtk.ResponseType.OK)
+
+    def on_edit_toggled(self, button):
+        button.set_label("Done" if button.get_active() else "\u2212 Edit")
+        self.choose(self.color, keep_row=True)
+
+    def on_mine_clicked(self, base):
+        if base in self.row:
+            self.on_edit_mine(base)
+        else:
+            self.choose(base, keep_slot=True)
+
+    def on_mine_removed(self, base):
+        self.memory.remove_mine(base)
+        self._fill_mine()
+        self.choose(self.color, keep_row=True)
+
+    def _ask_color(self, title, start):
+        """GTK's color editor; returns the picked hex or None"""
+        chooser = Gtk.ColorChooserDialog(title=title, transient_for=self)
+        chooser.set_use_alpha(False)
+        chooser.set_property("show-editor", True)
+        rgba = Gdk.RGBA()
+        rgba.parse(start)
+        chooser.set_rgba(rgba)
+        picked = None
+        if chooser.run() == Gtk.ResponseType.OK:
+            value = chooser.get_rgba()
+            picked = "#{:02x}{:02x}{:02x}".format(
+                round(value.red * 255), round(value.green * 255), round(value.blue * 255))
+        chooser.destroy()
+        return picked
+
+    def on_edit_mine(self, base):
+        """Change the base of an entry in Your colors, keeping its place"""
+        color = self._ask_color("Change Color", base)
+        if not color:
+            return
+        self.memory.replace_mine(base, color)
+        self.__dict__.pop('_row_cache', None)
+        self._fill_mine()
+        self.choose(color)
 
     def on_add_custom(self):
         """GTK's color editor for a custom color, added to Your colors"""
@@ -1634,8 +1743,7 @@ class EasySSHTunnelApp(Gtk.Window):
         self.tunnel_view.get_style_context().add_class("tunnel-list")
         self.tunnel_view.connect("row-activated", self.on_row_activated)
         self.tunnel_view.connect("button-press-event", self.on_list_button_press)
-        self._selected_at = 0.0
-        self._pending_toggle = None
+        self._last_click = None
         # Terminal and Duplicate need a selected tunnel
         self.tunnel_view.get_selection().connect("changed", self.on_selection_changed)
         self.toolbar_buttons["Terminal"].set_sensitive(False)
@@ -1794,6 +1902,18 @@ class EasySSHTunnelApp(Gtk.Window):
 
         .color-picker headerbar button:hover {
             background: @bg_secondary;
+        }
+
+        button.edit-toggle {
+            padding: 0 8px;
+            min-height: 0;
+            font-size: 12px;
+            color: @text_dim;
+        }
+
+        button.edit-toggle:checked {
+            background: @bg_secondary;
+            color: @text_primary;
         }
 
         entry.hex-entry {
@@ -1993,44 +2113,33 @@ class EasySSHTunnelApp(Gtk.Window):
             self.on_start_tunnel(None)
 
     def on_row_activated(self, view, path, column):
-        """Double-click (or Enter) opens the tunnel in Edit; the switch column has its own clicks"""
-        self._cancel_pending_toggle()
+        """Enter on a row opens Edit; mouse double-clicks are handled in on_list_button_press"""
         if column is not self.switch_column:
             self.tunnel_view.get_selection().select_path(path)
             self.on_edit_tunnel(None)
 
-    def _cancel_pending_toggle(self):
-        if self._pending_toggle:
-            GLib.source_remove(self._pending_toggle)
-            self._pending_toggle = None
+    EDIT_CLICK_WINDOW = 1.0
 
     def on_list_button_press(self, view, event):
-        """A single click on a row that was already selected (over half a second ago) toggles it"""
+        """Two clicks on the same row within a second open Edit. Only the switch toggles a tunnel."""
         if event.button != 1:
             return False
         if event.type != Gdk.EventType.BUTTON_PRESS:
-            # Second click of a double-click: row-activated opens Edit instead
-            self._cancel_pending_toggle()
-            return False
+            # GTK's own double-click would also activate the row; the timing below decides
+            return True
         hit = view.get_path_at_pos(int(event.x), int(event.y))
         if not hit or hit[1] is self.switch_column:
+            self._last_click = None
             return False
-        selected = self._selected_config()
-        clicked = self.tunnel_store[hit[0]][7]
-        if (selected is not None and selected.get('id') == clicked.get('id')
-                and time.monotonic() - self._selected_at > 0.5):
-            # Wait out the double-click time, so a double-click edits instead of toggling
-            self._cancel_pending_toggle()
-            delay = Gtk.Settings.get_default().get_property("gtk-double-click-time")
-            self._pending_toggle = GLib.timeout_add(delay, self._toggle_after_click, clicked.get('id'))
-        return False
-
-    def _toggle_after_click(self, tunnel_id):
-        self._pending_toggle = None
-        selected = self._selected_config()
-        if selected and selected.get('id') == tunnel_id:
-            path = next(row.path for row in self.tunnel_store if row[7].get('id') == tunnel_id)
-            self.on_switch_toggled(None, path)
+        tunnel_id = self.tunnel_store[hit[0]][7].get('id')
+        now = time.monotonic()
+        last = self._last_click
+        if last and last[0] == tunnel_id and now - last[1] <= self.EDIT_CLICK_WINDOW:
+            self._last_click = None
+            view.get_selection().select_path(hit[0])
+            GLib.idle_add(lambda: self.on_edit_tunnel(None) and False)
+            return True
+        self._last_click = (tunnel_id, now)
         return False
 
     def on_add_tunnel(self, widget, prefill=None, tint_row_hint=None):
@@ -2222,9 +2331,6 @@ class EasySSHTunnelApp(Gtk.Window):
 
     def on_selection_changed(self, selection):
         selected = self._selected_config()
-        if selected is None or selected.get('id') != getattr(self, '_selected_id', None):
-            self._selected_at = time.monotonic()
-            self._selected_id = selected.get('id') if selected else None
         for name in ("Terminal", "Duplicate"):
             self.toolbar_buttons[name].set_sensitive(selected is not None)
 

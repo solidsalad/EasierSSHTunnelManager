@@ -69,7 +69,7 @@
 - **User-Friendly Interface:**
   - Dark GTK3 interface
   - A color per tunnel, shown in the list and as a dot in the tray menu
-  - Color picker with 30 theme presets, your colors, recent colors and 5 shades of the selected color (2 tints, the color, 2 darker shades); a custom color can be added with the GTK color editor
+  - Color picker with 24 theme presets, your colors, recent colors and 5 shades of the selected color (2 tints, the color, 2 darker shades); a custom color can be added with the GTK color editor, changed by clicking it again, and removed in edit mode
   - Simple dialog for configuring tunnels
   - Real-time status indicators
 
@@ -188,7 +188,7 @@ The application will start minimized to the system tray. Look for the network ic
    - **Stop** - Deactivate a tunnel; on a stopped tunnel this clears it to offline
    - **Terminal** - Open `ssh [user@]host` in the default terminal (`x-terminal-emulator`). Greyed out until a tunnel is selected. When the tunnel is not open, a dialog offers **Start tunnel**, **Open SSH session** or **Both**; the ssh session alone does not open the tunnel's port.
 3. The switch at the start of each row shows whether the tunnel's port is open and follows the connection: it turns off when ssh exits.
-   Double-clicking a row opens Edit. A single click on a row that is already selected toggles the tunnel.
+   Only the switch turns a tunnel on or off. Two clicks on the same row within a second open Edit.
 4. **Quit** (tray menu, or closing the window with `--no-indicator`) stops every tunnel the app started. When tunnels are running, the app asks first.
 
 ### Tunnel Status
