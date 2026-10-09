@@ -939,6 +939,41 @@ class TunnelDialog(Gtk.Dialog):
             self.remote_host_entry.set_editable(False)
             self.remote_port_entry.set_editable(False)
 
+    def missing_fields(self):
+        """Labels of required fields that are empty"""
+        data = self.get_data()
+        missing = []
+        if not data['name']:
+            missing.append("Tunnel Name")
+        if not data['ssh_host']:
+            missing.append("Host")
+        if not data.get('forwards'):
+            port_label = "SOCKS Port" if data['type'] == 'dynamic' else "Local Port"
+            if not data['local_port']:
+                missing.append(port_label)
+            if data['type'] in ('local', 'remote'):
+                if not data['remote_host']:
+                    missing.append("Remote Host")
+                if not data['remote_port']:
+                    missing.append("Remote Port")
+        return missing
+
+    def run_until_valid(self):
+        """Run the dialog; on OK with missing fields, warn and keep the dialog open"""
+        while True:
+            response = self.run()
+            if response != Gtk.ResponseType.OK:
+                return response
+            missing = self.missing_fields()
+            if not missing:
+                return response
+            warning = Gtk.MessageDialog(
+                parent=self, flags=0, message_type=Gtk.MessageType.WARNING,
+                buttons=Gtk.ButtonsType.OK, text="Some required fields are empty")
+            warning.format_secondary_text("Fill in: " + ", ".join(missing))
+            warning.run()
+            warning.destroy()
+
     def get_data(self):
         """Get tunnel data from the form"""
         data = {
@@ -1425,17 +1460,12 @@ class EasySSHTunnelApp(Gtk.Window):
         dialog = TunnelDialog(self, prefill)
         if not prefill or not prefill.get('color'):
             dialog.set_color(ConfigManager.new_tunnel_fields(self.tunnels_config)['color'])
-        response = dialog.run()
-
-        if response == Gtk.ResponseType.OK:
+        if dialog.run_until_valid() == Gtk.ResponseType.OK:
             data = dialog.get_data()
-            if data['name'] and data['ssh_host']:
-                data['id'] = ConfigManager.new_tunnel_fields(self.tunnels_config)['id']
-                self.tunnels_config.append(data)
-                self._tunnels_changed()
-                self.show_message("Tunnel configuration added")
-            else:
-                self.show_error("Please fill in at least name and host")
+            data['id'] = ConfigManager.new_tunnel_fields(self.tunnels_config)['id']
+            self.tunnels_config.append(data)
+            self._tunnels_changed()
+            self.show_message("Tunnel configuration added")
 
         dialog.destroy()
 
@@ -1447,27 +1477,22 @@ class EasySSHTunnelApp(Gtk.Window):
             return
 
         dialog = TunnelDialog(self, config)
-        response = dialog.run()
-
-        if response == Gtk.ResponseType.OK:
+        if dialog.run_until_valid() == Gtk.ResponseType.OK:
             new_data = dialog.get_data()
-            if new_data['name'] and new_data['ssh_host']:
-                tunnel_id = config.get('id')
-                was_running = self.tunnel_manager.is_running(tunnel_id)
-                if was_running:
-                    self.tunnel_manager.stop_tunnel(tunnel_id)
-                for i, c in enumerate(self.tunnels_config):
-                    if c.get('id') == tunnel_id:
-                        self.tunnels_config[i] = new_data
-                        break
-                self.tunnel_manager.scanner._stamp = 0.0
-                if was_running:
-                    self.tunnel_manager.start_tunnel(tunnel_id, new_data)
-                self._tunnels_changed()
-                self.show_message("Tunnel configuration updated"
-                                  + (" and restarted" if was_running else ""))
-            else:
-                self.show_error("Please fill in at least name and host")
+            tunnel_id = config.get('id')
+            was_running = self.tunnel_manager.is_running(tunnel_id)
+            if was_running:
+                self.tunnel_manager.stop_tunnel(tunnel_id)
+            for i, c in enumerate(self.tunnels_config):
+                if c.get('id') == tunnel_id:
+                    self.tunnels_config[i] = new_data
+                    break
+            self.tunnel_manager.scanner._stamp = 0.0
+            if was_running:
+                self.tunnel_manager.start_tunnel(tunnel_id, new_data)
+            self._tunnels_changed()
+            self.show_message("Tunnel configuration updated"
+                              + (" and restarted" if was_running else ""))
 
         dialog.destroy()
 
