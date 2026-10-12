@@ -3684,7 +3684,7 @@ class EasySSHTunnelApp(Gtk.Window):
         box.pack_start(show_unchanged, False, False, 0)
         box.pack_start(Gtk.Label(label="Profiles", xalign=0), False, False, 4)
         box.pack_start(table([("", 'dot'), ("Profile", 'name'), ("Proxy", 'expand')],
-                             profiles, 120), False, True, 0)
+                             profiles, 170), False, True, 0)
         box.pack_start(Gtk.Label(label="Auto switch rules, in the order ZeroOmega checks them",
                                  xalign=0), False, False, 4)
         switch_names = {r[3] for r in rules}

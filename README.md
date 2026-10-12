@@ -10,6 +10,16 @@
 > | Tunnel colors and a dark theme | [#5](https://github.com/ProjectMakersDE/EasySSHTunnelManager/pull/5) |
 > | Autostart question in install.sh | [#6](https://github.com/ProjectMakersDE/EasySSHTunnelManager/pull/6) |
 >
+> Only in this fork:
+>
+> | Change |
+> |---|
+> | Color picker with presets, your colors, recent colors and shades per color |
+> | Duplicate a tunnel; clicking the selected row opens Edit |
+> | Fedora, Arch and openSUSE support in install.sh, window mode without a tray |
+> | Settings window, ZeroOmega export with a preview, optional auto switch rules learned per tunnel |
+> | Start all / Stop all in the tray menu, a notification when a tunnel stops unexpectedly |
+>
 > The app is renamed to Easier SSH Tunnel Manager: command `easier_ssh_tunnel.py`, config in `~/.config/easier-ssh-tunnel/`. On first start it copies the tunnels from `~/.config/easy-ssh-tunnel/`, so it can be installed next to the original.
 >
 > The screenshots below use demo tunnels on example.com hosts.
@@ -29,17 +39,32 @@
 ### Main Window
 ![Main Window](screenshots/main-window.png)
 
-*Main window: ON/OFF switch, tunnel color, status and the last ssh error per tunnel. The bar above the list shows a tunnel found outside the app.*
+*Main window: ON/OFF switch, tunnel color, status and the last ssh error per tunnel.*
 
 ### System Tray Integration
 ![System Tray](screenshots/system-tray.png)
 
-*Tray menu: status on the left (🟢 running, 🟡 connecting, 🔴 stopped, 🟠 external, ⚪ offline), tunnel color on the right. Click a tunnel to switch it on or off.*
+*Tray menu: status on the left (🟢 running, 🟡 connecting, 🔴 stopped, 🟠 external, ⚪ offline), tunnel color on the right. Click a tunnel to switch it on or off; Start all / Stop all below the list.*
 
 ### Add/Edit Tunnel Dialog
 ![Add Tunnel](screenshots/add-tunnel.png)
 
-*Tunnel dialog with color picker. User and Port left empty are taken from `~/.ssh/config`.*
+*Tunnel dialog. Click the color to open the picker. User and Port left empty are taken from `~/.ssh/config`.*
+
+### Color Picker
+![Color Picker](screenshots/color-picker.png)
+
+*Theme presets, your colors, recent colors, and five shades of the selected color.*
+
+### Settings
+![Settings](screenshots/settings.png)
+
+*Import and export, ZeroOmega export, site tracking and the browsers used for it.*
+
+### ZeroOmega Export Preview
+![ZeroOmega Export Preview](screenshots/export-preview.png)
+
+*What the export adds or changes in your ZeroOmega backup, and learned rules an existing rule already covers.*
 
 ---
 
@@ -49,7 +74,9 @@
   - Icon appears in the top bar (system tray)
   - Left-click: Quick menu showing all tunnels with status indicators
   - Click on tunnel name to toggle it on/off
-  - Each tunnel shows its status (🟢 running, 🟡 connecting, 🔴 stopped, ⚪ offline) and local port
+  - Each tunnel shows its status (🟢 running, 🟡 connecting, 🔴 stopped, 🟠 external, ⚪ offline) and local port
+  - One item to start all tunnels, or stop all when any runs
+  - A desktop notification when a tunnel stops unexpectedly
   - "Manage Tunnels..." option to open the full configuration GUI
 
 - **Multiple Tunnel Types:**
@@ -59,11 +86,13 @@
 
 - **Easy Management:**
   - Add, edit, and remove tunnel configurations
-  - Start and stop tunnels with the ON/OFF switch on each row, by double-clicking a row, or with the toolbar buttons
+  - Start and stop tunnels with the ON/OFF switch on each row or with the toolbar buttons
   - Start all or stop all tunnels at once
   - View tunnel status in real-time, with the last ssh error (for example a port that is already in use) in the Messages column
   - Open an interactive ssh session to a tunnel's host in the default terminal
   - Detect tunnels opened outside the app (a plain `ssh -D/-L` in a terminal, or a forward on a shared ControlMaster connection) and add them to the list
+  - Duplicate a tunnel with the next free port and a neighbouring shade of its color
+  - Export SOCKS tunnels to ZeroOmega, optionally with auto switch rules learned per tunnel
   - Persistent configuration storage
 
 - **User-Friendly Interface:**
@@ -172,8 +201,9 @@ The application will start minimized to the system tray. Look for the network ic
    - 🔴 = stopped, the tunnel was switched on but the connection went down
    - ⚪ = offline, the tunnel is switched off
 3. **Click on a tunnel name** to toggle it on/off
-4. **Click "Manage Tunnels..."** to open the full configuration window
-5. **Click "Quit"** to exit the application
+4. **Click "Start all"** to start every tunnel; while any runs it reads **"Stop all"**
+5. **Click "Manage Tunnels..."** to open the full configuration window
+6. **Click "Quit"** to exit the application
 
 ### Managing Tunnels
 
@@ -186,10 +216,10 @@ The application will start minimized to the system tray. Look for the network ic
    - **Start all** / **Stop all** - Start every tunnel that is not open, or stop every tunnel started by the app
    - **Start** - Activate a tunnel
    - **Stop** - Deactivate a tunnel; on a stopped tunnel this clears it to offline
-   - **Settings** - Import / export, ZeroOmega export and site tracking, see [Settings Menu](#settings-menu)
+   - **Settings** - Import / export, ZeroOmega export and site tracking, see [Settings](#settings-1)
    - **Terminal** - Open `ssh [user@]host` in the default terminal (`x-terminal-emulator`). Greyed out until a tunnel is selected. When the tunnel is not open, a dialog offers **Start tunnel**, **Open SSH session** or **Both**; the ssh session alone does not open the tunnel's port.
 3. The switch at the start of each row shows whether the tunnel's port is open and follows the connection: it turns off when ssh exits.
-   Only the switch turns a tunnel on or off. Two clicks on the same row within a second open Edit.
+   Only the switch turns a tunnel on or off. Clicking the row that is already selected opens Edit.
 4. **Quit** (tray menu, or closing the window with `--no-indicator`) stops every tunnel the app started. When tunnels are running, the app asks first.
 
 ### Tunnel Status
@@ -202,15 +232,17 @@ The application will start minimized to the system tray. Look for the network ic
 | External | the tunnel's port is held by an ssh process outside the app |
 | Offline | the tunnel is switched off |
 
-### Settings Menu
+### Settings
 
-The **Settings** button in the toolbar holds:
-- **Import SSH commands…** and **Export SSH commands…** (previously separate toolbar buttons)
-- **Export to ZeroOmega…**, see below
-- **Track visited sites**, off by default
-- **Save site history for editable wildcards**, off by default, and **Manage site history…**
-- **Clear site history…**
-- **Browsers for direct sites**: the browsers found on this computer, each can be switched off
+The **Settings** button in the toolbar opens a window with three sections:
+
+| Section | Contents |
+|---|---|
+| Import & export | Import SSH commands, Export SSH commands, Export to ZeroOmega |
+| Site tracking for ZeroOmega auto switch | Track which sites each tunnel is used for (off by default), Save site history for editable wildcards (off by default), Manage site history, Clear site history |
+| Browsers for direct sites | One switch per browser found on this computer |
+
+Each row says what it stores; the texts change with the settings.
 
 ### Export to ZeroOmega
 
