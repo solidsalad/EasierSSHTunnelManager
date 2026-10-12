@@ -19,25 +19,25 @@ cd "$(dirname "$0")" || exit 1
 echo "Installing dependencies..."
 if command -v apt-get &> /dev/null; then
     apt-get update
-    apt-get install -y python3 python3-gi python3-gi-cairo gir1.2-gtk-3.0 iproute2 openssh-client
+    apt-get install -y python3 python3-gi python3-gi-cairo gir1.2-gtk-3.0 gir1.2-notify-0.7 iproute2 openssh-client
     # Debian 12+ and Ubuntu 24.04+ ship the Ayatana indicator; older releases only the original
     apt-get install -y gir1.2-ayatanaappindicator3-0.1 || apt-get install -y gir1.2-appindicator3-0.1
     TRAY_EXTENSION_PACKAGE="gnome-shell-extension-appindicator"
     PM_INSTALL="apt-get install -y"
 elif command -v dnf &> /dev/null; then
     dnf install -y python3 python3-gobject python3-cairo gobject-introspection gtk3 \
-        libayatana-appindicator-gtk3 iproute openssh-clients
+        libayatana-appindicator-gtk3 libnotify iproute openssh-clients
     TRAY_EXTENSION_PACKAGE="gnome-shell-extension-appindicator"
     PM_INSTALL="dnf install -y"
 elif command -v pacman &> /dev/null; then
     pacman -S --needed --noconfirm python python-gobject python-cairo gtk3 \
-        libayatana-appindicator iproute2 openssh
+        libayatana-appindicator libnotify iproute2 openssh
     TRAY_EXTENSION_PACKAGE="gnome-shell-extension-appindicator"
     PM_INSTALL="pacman -S --needed --noconfirm"
 elif command -v zypper &> /dev/null; then
     zypper --non-interactive install python3 python3-gobject python3-gobject-cairo \
         python3-gobject-Gdk typelib-1_0-Gtk-3_0 typelib-1_0-AyatanaAppIndicator3-0_1 \
-        iproute2 openssh-clients
+        typelib-1_0-Notify-0_7 iproute2 openssh-clients
     TRAY_EXTENSION_PACKAGE=""
     PM_INSTALL="zypper --non-interactive install"
 else
