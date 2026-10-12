@@ -186,6 +186,7 @@ The application will start minimized to the system tray. Look for the network ic
    - **Start all** / **Stop all** - Start every tunnel that is not open, or stop every tunnel started by the app
    - **Start** - Activate a tunnel
    - **Stop** - Deactivate a tunnel; on a stopped tunnel this clears it to offline
+   - **Settings** - Import / export, ZeroOmega export and site tracking, see [Settings Menu](#settings-menu)
    - **Terminal** - Open `ssh [user@]host` in the default terminal (`x-terminal-emulator`). Greyed out until a tunnel is selected. When the tunnel is not open, a dialog offers **Start tunnel**, **Open SSH session** or **Both**; the ssh session alone does not open the tunnel's port.
 3. The switch at the start of each row shows whether the tunnel's port is open and follows the connection: it turns off when ssh exits.
    Only the switch turns a tunnel on or off. Two clicks on the same row within a second open Edit.
@@ -200,6 +201,51 @@ The application will start minimized to the system tray. Look for the network ic
 | Stopped | the tunnel was switched on, but ssh exited; the Messages column shows why |
 | External | the tunnel's port is held by an ssh process outside the app |
 | Offline | the tunnel is switched off |
+
+### Settings Menu
+
+The **Settings** button in the toolbar holds:
+- **Import SSH commands…** and **Export SSH commands…** (previously separate toolbar buttons)
+- **Export to ZeroOmega…**, see below
+- **Track visited sites**, off by default
+- **Save site history for editable wildcards**, off by default, and **Manage site history…**
+- **Clear site history…**
+- **Browsers for direct sites**: the browsers found on this computer, each can be switched off
+
+### Export to ZeroOmega
+
+[ZeroOmega](https://github.com/zero-peak/ZeroOmega) is a proxy switching browser extension (the maintained successor of SwitchyOmega). The export writes a ZeroOmega backup file with a SOCKS5 profile (`127.0.0.1:<port>`, the tunnel's color) for every dynamic (`-D`) tunnel.
+
+1. In ZeroOmega's options, open **Import/Export** and click **Make backup**.
+2. In this app, choose **Settings → Export to ZeroOmega…** and pick that backup.
+3. Check the preview: every profile and auto switch rule with its status (**New**, **Changed** with what changed, or **Unchanged**; tick **Show unchanged** to see everything in ZeroOmega's order), plus learned rules left out because an existing rule already catches those sites first (**Covered**: same profile, **Conflict**: your rule sends them to another profile).
+4. Save the merged file, then in ZeroOmega use **Import/Export → Restore from file**.
+
+The export merges into your backup: a profile that already points at a tunnel's port gets the tunnel's color and keeps its name, other tunnels get a new profile, and your auto switch rules and all other settings stay as they are. **Without backup** writes a file with only the tunnel profiles.
+
+#### Auto switch rules from tracked sites (optional)
+
+With **Track visited sites** on, the app learns auto switch rules per tunnel, and the export adds the rules your auto switch does not have yet. Existing rules are never changed and come first.
+
+**This does not track your browsing, and no sites are stored.** When a tunnel opens a connection, ssh names the host (`LogLevel=DEBUG2` reports each host opened through a `-D` tunnel). The app turns that host into a rule for the tunnel right away, for example `*.dri.example.com`, and stores only the rule, in `~/.config/easier-ssh-tunnel/rules.json`. Hosts, pages, paths and times are never written down. **Clear site history** removes the learned rules. Tracking applies to tunnels started after it is turned on.
+
+How rules are chosen, always from all data at once:
+- Every site of a tunnel gets the broadest `*.domain` (up to its registrable domain) that catches no site opened without a tunnel and nothing another tunnel uses; rules covered by a broader one are dropped, so the list is as short as possible. `gitlab.dri.example.com` and `vault.dri.example.com` become `*.dri.example.com`, unless `wiki.dri.example.com` is opened directly or `gitlab.uat.dri.example.com` goes through another tunnel; then they become `*.gitlab.dri.example.com` and `*.vault.dri.example.com`.
+- IP addresses get an exact rule.
+- Rules of different tunnels never overlap. When a host moves to another tunnel, the latest tunnel wins it.
+- At export, rules of a tunnel that differ in only some labels are merged into one ZeroOmega wildcard that keeps what they share: `*.poa-anpr-a.antwerpen.be` and `*.poa-anpr.antwerpen.be` become `*poa-anpr*.antwerpen.be`, three `…prod.inuits.eu` rules become `*prod.inuits.eu`. A merged wildcard is only used when it still catches no site opened without a tunnel and nothing of another tunnel (checked with ZeroOmega's matching).
+- Sites without a tunnel get no rule: they use ZeroOmega's default profile.
+
+Two ways of storing, with the same rules:
+
+| Setting | Stored | Difference |
+|---|---|---|
+| Default | only the rules (`rules.json`) | When a broad rule has to narrow (a site under it is opened directly or by another tunnel), its sites are not known anymore: they go direct until the tunnel uses them again, and then get their narrower rule. Another tunnel never gets a rule covering that area meanwhile. |
+| **Save site history for editable wildcards** | also the host names per tunnel (`hosts.json`) | Narrower rules are computed right away, and **Manage site history…** lets you delete single hosts. |
+
+With the site history saved, **Manage site history… → Fill from browser history** fills it retroactively. Browsers do not record which proxy a page used, so the app reads ZeroOmega's own settings straight from the browser profile (its extension storage, read from a temporary copy; Chromium-based browsers) and runs every host from the enabled browsers' history through ZeroOmega's auto switch rules, first match wins. Hosts that end up on a profile using a tunnel's port are added to that tunnel's site history, and the rules are recomputed. Hosts that end up direct are not stored.
+
+To know which sites you open without a tunnel, the app reads the local history of the browsers checked under **Browsers for direct sites** (Brave, Chrome, Chromium, Edge, Vivaldi, Opera, Firefox, LibreWolf, Zen, Waterfox, including Flatpak and Snap installs) every 30 minutes and at export, from a temporary copy, and keeps it in memory only. A learned rule that turns out to catch such a site is dropped, and the tunnel learns a narrower one the next time it is used. Turning tracking on enables every browser installed at that moment; a browser installed later starts switched off until you enable it.
 
 ### Tunnels Opened Outside the App
 
