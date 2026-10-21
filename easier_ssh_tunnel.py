@@ -27,6 +27,7 @@ import fnmatch
 import glob
 import ipaddress
 import itertools
+import colorsys
 import json
 import math
 import sqlite3
@@ -1545,6 +1546,88 @@ def copy_to_clipboard(text):
     clipboard.set_text(text, -1)
     clipboard.store()
     return True
+
+
+BADGE_RED = "#e01b24"
+# Hue (0-1) the green tray icon is recolored to: orange when some started tunnels stopped,
+# red when all of them did
+ICON_HUES = {'orange': 30 / 360, 'red': 0.0}
+
+
+def _recolor(surface, hue):
+    """Give every colored pixel of an ARGB32 surface a new hue, keeping lightness and saturation"""
+    surface.flush()
+    data = surface.get_data()
+    for i in range(0, len(data), 4):
+        b, g, r, a = data[i], data[i + 1], data[i + 2], data[i + 3]
+        if not a:
+            continue
+        h, light, sat = colorsys.rgb_to_hls(r / a, g / a, b / a)
+        # Orange and red need more saturation and light than the green to read as such
+        r2, g2, b2 = colorsys.hls_to_rgb(hue, min(0.85, light * 1.12), min(1.0, sat * 1.7))
+        data[i], data[i + 1], data[i + 2] = round(b2 * a), round(g2 * a), round(r2 * a)
+    surface.mark_dirty()
+
+
+def _left_margin(surface):
+    """Fully transparent columns on the left of an ARGB32 surface"""
+    surface.flush()
+    width, height, stride = surface.get_width(), surface.get_height(), surface.get_stride()
+    data = surface.get_data()
+    for x in range(width):
+        if any(data[y * stride + x * 4 + 3] > 20 for y in range(height)):
+            return x
+    return 0
+
+
+def tray_icon_with_badge(base_png, out_dir, name, count=0, badge_color=BADGE_RED, scale=2,
+                         hue=None):
+    """Write <out_dir>/<name>.png: the base tray icon scaled up (crisp, whole pixels), recolored
+    to hue if given, with a round badge holding count in the top-right corner; no badge for 0.
+    Returns the icon name."""
+    path = os.path.join(out_dir, name + '.png')
+    if os.path.exists(path):
+        return name
+    base = cairo.ImageSurface.create_from_png(base_png)
+    if hue is not None:
+        copy = cairo.ImageSurface(cairo.FORMAT_ARGB32, base.get_width(), base.get_height())
+        context = cairo.Context(copy)
+        context.set_source_surface(base, 0, 0)
+        context.paint()
+        _recolor(copy, hue)
+        base = copy
+    size = base.get_width() * scale
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, size, size)
+    cr = cairo.Context(surface)
+    cr.scale(scale, scale)
+    # With a badge the icon moves into its empty left margin, so the badge can sit about half
+    # over its right edge
+    cr.set_source_surface(base, -_left_margin(base) if count else 0, 0)
+    cr.get_source().set_filter(cairo.FILTER_NEAREST)
+    cr.paint()
+    if count:
+        cr = cairo.Context(surface)
+        # Large enough to stay legible when the tray shrinks the icon to 16-22 px
+        radius = size * 0.33
+        cx, cy = size - radius, radius
+        rgba = Gdk.RGBA()
+        rgba.parse(badge_color)
+        cr.arc(cx, cy, radius, 0, 6.2832)
+        cr.set_source_rgb(rgba.red, rgba.green, rgba.blue)
+        cr.fill_preserve()
+        cr.set_source_rgba(0, 0, 0, 0.45)
+        cr.set_line_width(size * 0.04)
+        cr.stroke()
+        text = str(count) if count < 10 else "9+"
+        cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+        cr.set_font_size(radius * (1.6 if len(text) == 1 else 1.15))
+        extents = cr.text_extents(text)
+        cr.move_to(cx - extents.width / 2 - extents.x_bearing,
+                   cy - extents.height / 2 - extents.y_bearing)
+        cr.set_source_rgb(1, 1, 1)
+        cr.show_text(text)
+    surface.write_to_png(path)
+    return name
 
 
 def tray_available():
@@ -3340,6 +3423,7 @@ class EasySSHTunnelApp(Gtk.Window):
 
     def auto_scan(self):
         found = self._new_external()
+        self.outside_count = len(found)
         if found:
             ports = ", ".join(f"{e['port']} ({e['host']})" for e in found)
             self.scan_label.set_text(f"Found {len(found)} tunnel(s) opened outside the app: {ports}")
@@ -4284,21 +4368,23 @@ class SSHTunnelIndicator:
         self.icon_name_white = "easy-ssh-tunnel-white"
         self.icon_name_green = "easy-ssh-tunnel-green"
 
+        # Tray icons are drawn into a cache folder: the base icon (green while a tunnel runs)
+        # with a badge counting stopped tunnels (red) or tunnels opened outside the app (orange)
+        self.badge_dir = Path.home() / '.cache' / APP_ID / 'tray'
+        self.badge_dir.mkdir(parents=True, exist_ok=True)
+        for old in self.badge_dir.glob('*.png'):
+            old.unlink()
+        self.current_icon = self._tray_icon('idle', 0)
+
         # Create the indicator with icon theme path
         self.indicator = AppIndicator3.Indicator.new(
             APP_ID,
-            self.icon_name_white,
+            self.current_icon,
             AppIndicator3.IndicatorCategory.APPLICATION_STATUS
         )
-        self.indicator.set_icon_theme_path(self.icon_theme_path)
+        self.indicator.set_icon_theme_path(str(self.badge_dir))
         self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
         self.indicator.set_title(APP_NAME)
-
-        # Set attention icon for when tunnels are active (green)
-        self.indicator.set_attention_icon(self.icon_name_green)
-
-        # Store current state
-        self.currently_active = False
 
         # Create main window (hidden initially) and pass shared managers
         self.window = EasySSHTunnelApp(
@@ -4380,28 +4466,56 @@ class SSHTunnelIndicator:
         self.window.refresh_tunnel_list()
         self.build_menu()
 
+    def _tray_icon(self, state, count):
+        """state: 'idle' (white), 'ok' (green), 'orange' or 'red'; count: badge number"""
+        base = self.icon_name_white if state == 'idle' else self.icon_name_green
+        name = f"tray-{state}-{count}"
+        return tray_icon_with_badge(os.path.join(self.icon_theme_path, base + '.png'),
+                                    str(self.badge_dir), name, count, BADGE_RED,
+                                    hue=ICON_HUES.get(state))
+
     def update_menu_status(self):
         """Update menu status indicators periodically without rebuilding menu"""
         any_running = False
+        stopped = external = 0
         for menu_item, config in getattr(self, 'tunnel_menu_items', {}).values():
             status, label_text = self._menu_label(config)
             if status in ON_STATUSES:
                 any_running = True
+            stopped += status == "Stopped"
+            external += status == "External"
             if menu_item.get_label() != label_text:
                 menu_item.set_label(label_text)
+        external += getattr(self.window, 'outside_count', 0)
+        started = sum(1 for c in self.tunnels_config if c.get('id') in self.tunnel_manager.wanted)
 
         if getattr(self, 'all_item', None) is not None:
             label = self._all_label()
             if self.all_item.get_label() != label:
                 self.all_item.set_label(label)
 
-        # Switch between ACTIVE (normal icon) and ATTENTION (active icon)
-        if any_running and not self.currently_active:
-            self.indicator.set_status(AppIndicator3.IndicatorStatus.ATTENTION)
-            self.currently_active = True
-        elif not any_running and self.currently_active:
-            self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
-            self.currently_active = False
+        # Icon color: green when every started tunnel runs, orange when some of them stopped,
+        # red when all of them stopped, white when none is started. The red badge counts the
+        # notifications: stopped tunnels and tunnels opened outside the app.
+        if stopped and stopped >= started:
+            state = 'red'
+        elif stopped:
+            state = 'orange'
+        elif any_running or started:
+            state = 'ok'
+        else:
+            state = 'idle'
+        notifications = stopped + external
+        icon = self._tray_icon(state, notifications)
+        parts = []
+        if stopped:
+            parts.append(f"{stopped} of {started} started tunnel(s) stopped")
+        if external:
+            parts.append(f"{external} tunnel(s) opened outside the app")
+        description = "; ".join(parts) or APP_NAME
+        if icon != self.current_icon:
+            self.indicator.set_icon_full(icon, description)
+            self.current_icon = icon
 
         return True
 

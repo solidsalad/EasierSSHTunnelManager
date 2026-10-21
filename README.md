@@ -77,6 +77,8 @@
   - Each tunnel shows its status (🟢 running, 🟡 connecting, 🔴 stopped, 🟠 external, ⚪ offline) and local port
   - One item to start all tunnels, or stop all when any runs
   - A desktop notification when a tunnel stops unexpectedly
+  - The icon shows the state: white when nothing is started, green when every started tunnel runs, orange when some of them stopped, red when all of them stopped
+  - A red badge on the icon counts the notifications: stopped tunnels and tunnels opened outside the app
   - "Manage Tunnels..." option to open the full configuration GUI
 
 - **Multiple Tunnel Types:**
