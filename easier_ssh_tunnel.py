@@ -1559,7 +1559,7 @@ def copy_to_clipboard(text):
 BADGE_RED = "#e01b24"
 # Hue (0-1) the green tray icon is recolored to: orange when some started tunnels stopped,
 # red when all of them did
-ICON_HUES = {'orange': 30 / 360, 'red': 0.0}
+ICON_HUES = {'yellow': 52 / 360, 'orange': 30 / 360, 'red': 0.0}
 
 
 def _recolor(surface, hue):
@@ -4759,7 +4759,7 @@ class SSHTunnelIndicator:
         self.build_menu()
 
     def _tray_icon(self, state, count):
-        """state: 'idle' (white), 'ok' (green), 'orange' or 'red'; count: badge number"""
+        """state: 'idle' (white), 'ok' (green), 'yellow', 'orange' or 'red'; count: badge number"""
         base = self.icon_name_white if state == 'idle' else self.icon_name_green
         name = f"tray-{state}-{count}"
         return tray_icon_with_badge(os.path.join(self.icon_theme_path, base + '.png'),
@@ -4769,13 +4769,14 @@ class SSHTunnelIndicator:
     def update_menu_status(self):
         """Update menu status indicators periodically without rebuilding menu"""
         any_running = False
-        stopped = external = 0
+        stopped = external = connecting = 0
         for menu_item, config in getattr(self, 'tunnel_menu_items', {}).values():
             status, label_text = self._menu_label(config)
             if status in ON_STATUSES:
                 any_running = True
             stopped += status == "Stopped"
             external += status == "External"
+            connecting += status == "Connecting"
             if menu_item.get_label() != label_text:
                 menu_item.set_label(label_text)
         external += getattr(self.window, 'outside_count', 0)
@@ -4786,13 +4787,16 @@ class SSHTunnelIndicator:
             if self.all_item.get_label() != label:
                 self.all_item.set_label(label)
 
-        # Icon color: green when every started tunnel runs, orange when some of them stopped,
-        # red when all of them stopped, white when none is started. The red badge counts the
+        # Icon color: green when every started tunnel runs, yellow while one is still connecting,
+        # orange when some of them stopped, red when all of them stopped, white when none is
+        # started. The red badge counts the
         # notifications: stopped tunnels and tunnels opened outside the app.
         if stopped and stopped >= started:
             state = 'red'
         elif stopped:
             state = 'orange'
+        elif connecting:
+            state = 'yellow'
         elif any_running or started:
             state = 'ok'
         else:
@@ -4802,6 +4806,8 @@ class SSHTunnelIndicator:
         parts = []
         if stopped:
             parts.append(f"{stopped} of {started} started tunnel(s) stopped")
+        if connecting:
+            parts.append(f"{connecting} tunnel(s) connecting")
         if external:
             parts.append(f"{external} tunnel(s) opened outside the app")
         description = "; ".join(parts) or APP_NAME
