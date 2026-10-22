@@ -1656,25 +1656,29 @@ def installed_script():
 
 def check_for_update():
     """Compare the installed script with the one on master. Returns a dict with 'available',
-    and 'date' / 'message' of the latest commit when GitHub's API answers."""
-    remote = _download(f"https://raw.githubusercontent.com/{UPDATE_REPO}/{UPDATE_BRANCH}/"
-                       "easier_ssh_tunnel.py")
-    with open(installed_script(), 'rb') as f:
-        local = f.read()
-    result = {'available': hashlib.sha256(remote).hexdigest() != hashlib.sha256(local).hexdigest(),
-              'id': hashlib.sha256(remote).hexdigest()[:12], 'date': '', 'message': ''}
+    the commit ('ref') and its 'date' / 'message' when GitHub's API answers. Files are fetched
+    by commit, because the branch URLs are cached for up to 5 minutes after a push."""
+    result = {'ref': UPDATE_BRANCH, 'date': '', 'message': ''}
     try:
         commit = json.loads(_download(
             f"https://api.github.com/repos/{UPDATE_REPO}/commits/{UPDATE_BRANCH}"))
+        result['ref'] = commit['sha']
         result['date'] = commit['commit']['committer']['date'][:10]
         result['message'] = commit['commit']['message'].splitlines()[0]
     except (OSError, ValueError, KeyError):
         pass
+    remote = _download(f"https://raw.githubusercontent.com/{UPDATE_REPO}/{result['ref']}/"
+                       "easier_ssh_tunnel.py")
+    with open(installed_script(), 'rb') as f:
+        local = f.read()
+    result['available'] = hashlib.sha256(remote).hexdigest() != hashlib.sha256(local).hexdigest()
+    result['id'] = hashlib.sha256(remote).hexdigest()[:12]
     return result
 
 
-def install_update(gui=True):
-    """Download master and replace the installed script and icons, wherever they are installed.
+def install_update(gui=True, ref=None):
+    """Download master (or the given commit) and replace the installed script and icons,
+    wherever they are installed.
     Uses pkexec (gui) or sudo when the install location is not writable. Returns (ok, message)."""
     script = installed_script()
     icon_dirs = [d for d in (os.path.join(os.path.dirname(script), 'icons'),
@@ -1683,8 +1687,9 @@ def install_update(gui=True):
         archive = os.path.join(tmp, 'master.tar.gz')
         try:
             with open(archive, 'wb') as f:
-                f.write(_download(f"https://codeload.github.com/{UPDATE_REPO}/tar.gz/refs/heads/"
-                                  f"{UPDATE_BRANCH}", timeout=60))
+                path = ref if ref and ref != UPDATE_BRANCH else f"refs/heads/{UPDATE_BRANCH}"
+                f.write(_download(f"https://codeload.github.com/{UPDATE_REPO}/tar.gz/{path}",
+                                  timeout=60))
             with tarfile.open(archive) as tar:
                 try:
                     tar.extractall(tmp, filter='data')
@@ -3616,7 +3621,7 @@ class EasySSHTunnelApp(Gtk.Window):
         ask.destroy()
         if answer != Gtk.ResponseType.OK:
             return
-        ok, message = install_update(gui=True)
+        ok, message = install_update(gui=True, ref=info.get('ref'))
         if not ok:
             self.show_error(message)
             return
@@ -4761,7 +4766,7 @@ def main():
             return
         if info['message']:
             print(f"New version: {info['message']} ({info['date']})")
-        ok, message = install_update(gui=False)
+        ok, message = install_update(gui=False, ref=info.get('ref'))
         print(message)
         if ok:
             print("Restart the app (Quit in the tray menu, then start it again) to use it.")
