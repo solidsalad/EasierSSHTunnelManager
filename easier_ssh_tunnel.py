@@ -1990,6 +1990,67 @@ class CellRendererSwitch(Gtk.CellRenderer):
         return True
 
 
+_POPUPS = []  # open popups, innermost last
+
+
+def _close_top_popup(gesture, n_press, x, y):
+    """A click on a window underneath an open popup closes the topmost popup (like Cancel).
+    A click on the topmost popup itself is a normal click inside it."""
+    if not _POPUPS or gesture.get_widget() is _POPUPS[-1]:
+        return
+    gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+    top = _POPUPS[-1]
+    # The click's time lets GNOME move focus to the popup underneath, not the clicked window
+    clicked_at = Gtk.get_current_event_time()
+
+    def focus_parent():
+        if top not in _POPUPS and _POPUPS:
+            _POPUPS[-1].present_with_time(clicked_at)
+        return False
+
+    def close():
+        if hasattr(top, 'request_close'):
+            top.request_close()
+        else:
+            top.response(Gtk.ResponseType.CANCEL)
+        GLib.timeout_add(60, focus_parent)
+        return False
+    GLib.idle_add(close)
+
+
+def run_popup(dialog, owner):
+    """Like dialog.run(), but not modal: a click on owner (or any window under the popup)
+    closes it through request_close() or a Cancel response. Returns the response."""
+    if not hasattr(owner, '_popup_click'):
+        owner._popup_click = Gtk.GestureMultiPress.new(owner)
+        owner._popup_click.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        owner._popup_click.connect("pressed", _close_top_popup)
+    dialog.set_modal(False)
+    dialog.set_transient_for(owner)
+    loop = GLib.MainLoop()
+    result = [Gtk.ResponseType.NONE]
+
+    def on_response(_dialog, response):
+        result[0] = response
+        if loop.is_running():
+            loop.quit()
+
+    def on_delete(*_args):
+        on_response(dialog, Gtk.ResponseType.DELETE_EVENT)
+        return True
+    handlers = [dialog.connect("response", on_response), dialog.connect("delete-event", on_delete)]
+    _POPUPS.append(dialog)
+    try:
+        dialog.show()
+        dialog.present()
+        loop.run()
+    finally:
+        _POPUPS.remove(dialog)
+        for handler in handlers:
+            dialog.disconnect(handler)
+    return result[0]
+
+
 class Swatch(Gtk.DrawingArea):
     """Clickable color circle or tile with a ring when selected"""
 
@@ -2318,7 +2379,7 @@ class ColorPickerDialog(Gtk.Dialog):
         rgba.parse(start)
         chooser.set_rgba(rgba)
         picked = None
-        if chooser.run() == Gtk.ResponseType.OK:
+        if run_popup(chooser, self) == Gtk.ResponseType.OK:
             value = chooser.get_rgba()
             picked = "#{:02x}{:02x}{:02x}".format(
                 round(value.red * 255), round(value.green * 255), round(value.blue * 255))
@@ -2343,7 +2404,7 @@ class ColorPickerDialog(Gtk.Dialog):
         rgba = Gdk.RGBA()
         rgba.parse(self.color)
         chooser.set_rgba(rgba)
-        if chooser.run() == Gtk.ResponseType.OK:
+        if run_popup(chooser, self) == Gtk.ResponseType.OK:
             picked = chooser.get_rgba()
             color = "#{:02x}{:02x}{:02x}".format(
                 round(picked.red * 255), round(picked.green * 255), round(picked.blue * 255))
@@ -2531,14 +2592,8 @@ class TunnelDialog(Gtk.Dialog):
     def open_color_picker(self):
         current = normalize_hex(self.color_entry.get_text()) or TUNNEL_PALETTE[0]
         picker = ColorPickerDialog(self, current, self.tint_row, self.color_memory)
-        # While the picker is open, a click on the main window must not close this dialog
-        window = self.get_transient_for()
-        paused = getattr(window, 'open_dialog', None)
-        if paused is not None:
-            window.open_dialog = None
-        response = picker.run()
-        if paused is not None:
-            window.open_dialog = paused
+        # A click on this dialog (outside the picker) closes the picker
+        response = run_popup(picker, self)
         if response == Gtk.ResponseType.OK:
             color, row = picker.result()
             self.tint_row = row
@@ -2610,20 +2665,8 @@ class TunnelDialog(Gtk.Dialog):
         """Run the dialog; on OK with missing fields, warn and keep the dialog open; on Cancel,
         Escape, closing or a click outside, ask before discarding changes"""
         self._initial_data = self.get_data()
-        parent = self.get_transient_for()
-        if parent is not None and hasattr(parent, 'open_dialog'):
-            parent.open_dialog = self
-            # run() makes the dialog modal; lift that so a click on the main window reaches it
-            self.connect("map", lambda *_: GLib.idle_add(lambda: self.set_modal(False)))
-        try:
-            return self._run_loop()
-        finally:
-            if parent is not None and hasattr(parent, 'open_dialog'):
-                parent.open_dialog = None
-
-    def _run_loop(self):
         while True:
-            response = self.run()
+            response = run_popup(self, self.get_transient_for())
             if response != Gtk.ResponseType.OK:
                 if self._confirm_discard():
                     return response
@@ -2843,7 +2886,7 @@ class SettingsDialog(Gtk.Dialog):
         self._update_sensitivity()
 
     def run_and_close(self):
-        self.run()
+        run_popup(self, self.app)
         self.destroy()
 
 
@@ -2991,11 +3034,6 @@ class EasySSHTunnelApp(Gtk.Window):
         self.tunnel_view.get_style_context().add_class("tunnel-list")
         self.tunnel_view.connect("row-activated", self.on_row_activated)
         self.tunnel_view.connect("button-press-event", self.on_list_button_press)
-        # A click anywhere on the main window while a tunnel dialog is open closes that dialog
-        self.open_dialog = None
-        self.outside_click = Gtk.GestureMultiPress.new(self)
-        self.outside_click.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
-        self.outside_click.connect("pressed", self.on_window_pressed)
         # Terminal and Duplicate need a selected tunnel
         self.tunnel_view.get_selection().connect("changed", self.on_selection_changed)
         self.toolbar_buttons["Terminal"].set_sensitive(False)
@@ -3265,6 +3303,10 @@ class EasySSHTunnelApp(Gtk.Window):
         toolbar.manage-tunnel-toolbar toolbutton.toolbar-button-danger button:hover {
             background: #432830;
             border-color: #f2495c;
+        }
+
+        toolbar.manage-tunnel-toolbar toolbutton button:disabled {
+            opacity: 0.35;
         }
 
         toolbar.manage-tunnel-toolbar toolbutton button:checked,
@@ -3542,8 +3584,7 @@ class EasySSHTunnelApp(Gtk.Window):
         port = tunnel_port(config)
         owner = self.tunnel_manager.port_owner(port) or {}
         command = ' '.join(PortScanner.cmdline(owner.get('pid', 0)))
-        dialog = Gtk.MessageDialog(
-            parent=self, flags=0, message_type=Gtk.MessageType.QUESTION,
+        dialog = Gtk.MessageDialog(parent=self._top_window(), flags=0, message_type=Gtk.MessageType.QUESTION,
             buttons=Gtk.ButtonsType.YES_NO,
             text=f"Port {port} was opened outside this app. Stop it?")
         dialog.format_secondary_text(
@@ -3614,10 +3655,6 @@ class EasySSHTunnelApp(Gtk.Window):
         for name in self.SELECTION_BUTTONS:
             self.toolbar_buttons[name].set_sensitive(selected is not None)
 
-    def on_window_pressed(self, gesture, n_press, x, y):
-        if self.open_dialog is not None:
-            gesture.set_state(Gtk.EventSequenceState.CLAIMED)
-            GLib.idle_add(self.open_dialog.request_close)
 
     # Choices in the dialog for Terminal on a tunnel that is not open
     TERMINAL_SESSION, TERMINAL_TUNNEL, TERMINAL_BOTH = 1, 2, 3
@@ -3701,6 +3738,10 @@ class EasySSHTunnelApp(Gtk.Window):
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         Gtk.main_quit()
 
+    def _top_window(self):
+        """Innermost open popup, so dialogs open on top of it instead of behind it"""
+        return _POPUPS[-1] if _POPUPS else self
+
     def on_open_settings(self, button):
         SettingsDialog(self).run_and_close()
 
@@ -3740,7 +3781,7 @@ class EasySSHTunnelApp(Gtk.Window):
     def set_tracking(self, on):
         """Turn site tracking on (after confirmation) or off; returns whether it changed"""
         if on:
-            dialog = Gtk.MessageDialog(parent=self, flags=0, message_type=Gtk.MessageType.INFO,
+            dialog = Gtk.MessageDialog(parent=self._top_window(), flags=0, message_type=Gtk.MessageType.INFO,
                                        buttons=Gtk.ButtonsType.NONE,
                                        text="Track which sites each tunnel is used for?")
             dialog.format_secondary_text(self.TRACKING_NOTE)
@@ -3766,7 +3807,7 @@ class EasySSHTunnelApp(Gtk.Window):
     def set_keep_hosts(self, keep):
         """Store host names per tunnel too (after confirmation), or rules only"""
         if keep:
-            dialog = Gtk.MessageDialog(parent=self, flags=0, message_type=Gtk.MessageType.QUESTION,
+            dialog = Gtk.MessageDialog(parent=self._top_window(), flags=0, message_type=Gtk.MessageType.QUESTION,
                                        buttons=Gtk.ButtonsType.NONE,
                                        text="Save the host names per tunnel?")
             dialog.format_secondary_text(
@@ -3791,7 +3832,7 @@ class EasySSHTunnelApp(Gtk.Window):
     def on_manage_site_history(self, item):
         """List the stored hosts per tunnel; selected ones can be deleted"""
         names = {c.get('id'): c.get('name', '') for c in self.tunnels_config}
-        dialog = Gtk.Dialog(title="Site history", parent=self, flags=0)
+        dialog = Gtk.Dialog(title="Site history", transient_for=self._top_window())
         dialog.add_buttons(Gtk.STOCK_CLOSE, Gtk.ResponseType.CLOSE)
         dialog.set_default_size(560, 420)
         box = dialog.get_content_area()
@@ -3842,7 +3883,7 @@ class EasySSHTunnelApp(Gtk.Window):
         buttons.pack_start(delete, True, True, 0)
         box.pack_start(buttons, False, False, 0)
         dialog.show_all()
-        dialog.run()
+        run_popup(dialog, dialog.get_transient_for())
         dialog.destroy()
 
     def fill_site_history(self):
@@ -3880,7 +3921,7 @@ class EasySSHTunnelApp(Gtk.Window):
                 + f"\n{added} new hosts added; the rules were recomputed.")
 
     def on_clear_site_history(self, item):
-        dialog = Gtk.MessageDialog(parent=self, flags=0, message_type=Gtk.MessageType.QUESTION,
+        dialog = Gtk.MessageDialog(parent=self._top_window(), flags=0, message_type=Gtk.MessageType.QUESTION,
                                    buttons=Gtk.ButtonsType.YES_NO, text="Clear the site history?")
         dialog.format_secondary_text(
             "This removes the auto switch rules learned per tunnel, and the saved host names if "
@@ -3920,7 +3961,7 @@ class EasySSHTunnelApp(Gtk.Window):
         profiles, rules = zeroomega_changes(before, after)
         left_out = [(item['status'], item['pattern'], item['profile'],
                      f"{item['existing']} \u2192 {item['existing_profile']}") for item in skipped]
-        dialog = Gtk.Dialog(title="ZeroOmega export preview", transient_for=self, modal=True)
+        dialog = Gtk.Dialog(title="ZeroOmega export preview", transient_for=self._top_window())
         # A normal window, so it can be resized and maximized
         dialog.set_type_hint(Gdk.WindowTypeHint.NORMAL)
         dialog.set_resizable(True)
@@ -4040,13 +4081,13 @@ class EasySSHTunnelApp(Gtk.Window):
                            False, True, 0)
         box.pack_start(copied, False, False, 0)
         dialog.show_all()
-        response = dialog.run()
+        response = run_popup(dialog, dialog.get_transient_for())
         dialog.destroy()
         return response == Gtk.ResponseType.OK
 
     def on_export_zeroomega(self, widget):
         """Merge tunnel profiles (and tracked-site rules) into a ZeroOmega backup"""
-        intro = Gtk.MessageDialog(parent=self, flags=0, message_type=Gtk.MessageType.INFO,
+        intro = Gtk.MessageDialog(parent=self._top_window(), flags=0, message_type=Gtk.MessageType.INFO,
                                   buttons=Gtk.ButtonsType.NONE, text="Export to ZeroOmega")
         intro.format_secondary_text(
             "Pick your current ZeroOmega backup (ZeroOmega options \u2192 Import/Export \u2192 "
@@ -4066,7 +4107,7 @@ class EasySSHTunnelApp(Gtk.Window):
 
         options = {}
         if answer == Gtk.ResponseType.OK:
-            chooser = Gtk.FileChooserDialog(title="Current ZeroOmega backup", parent=self,
+            chooser = Gtk.FileChooserDialog(title="Current ZeroOmega backup", parent=self._top_window(),
                                             action=Gtk.FileChooserAction.OPEN)
             chooser.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
                                 Gtk.STOCK_OPEN, Gtk.ResponseType.OK)
@@ -4101,7 +4142,7 @@ class EasySSHTunnelApp(Gtk.Window):
                                       skipped=summary['skipped']):
             return
 
-        saver = Gtk.FileChooserDialog(title="Save ZeroOmega backup", parent=self,
+        saver = Gtk.FileChooserDialog(title="Save ZeroOmega backup", parent=self._top_window(),
                                       action=Gtk.FileChooserAction.SAVE)
         saver.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
                           Gtk.STOCK_SAVE, Gtk.ResponseType.OK)
@@ -4120,7 +4161,7 @@ class EasySSHTunnelApp(Gtk.Window):
         except OSError as e:
             self.show_error(f"Could not save {target}: {e}")
             return
-        done = Gtk.MessageDialog(parent=self, flags=0, message_type=Gtk.MessageType.INFO,
+        done = Gtk.MessageDialog(parent=self._top_window(), flags=0, message_type=Gtk.MessageType.INFO,
                                  buttons=Gtk.ButtonsType.OK, text="ZeroOmega backup saved")
         parts = []
         if summary['added']:
@@ -4153,8 +4194,7 @@ class EasySSHTunnelApp(Gtk.Window):
         user = config.get('ssh_user')
         dest = f"{user}@{host}" if user else host
         port = tunnel_port(config)
-        dialog = Gtk.MessageDialog(
-            parent=self, flags=0, message_type=Gtk.MessageType.QUESTION,
+        dialog = Gtk.MessageDialog(parent=self._top_window(), flags=0, message_type=Gtk.MessageType.QUESTION,
             buttons=Gtk.ButtonsType.NONE,
             text=f"Tunnel '{config.get('name', '')}' is not open")
         dialog.format_secondary_text(
@@ -4192,7 +4232,7 @@ class EasySSHTunnelApp(Gtk.Window):
         found = self.tunnel_manager.scanner.external_tunnels(self.tunnel_manager.own_pids())
         known_ports = {tunnel_port(c) for c in self.tunnels_config}
 
-        dialog = Gtk.Dialog(title="Tunnels opened outside the app", parent=self, flags=0)
+        dialog = Gtk.Dialog(title="Tunnels opened outside the app", transient_for=self._top_window(), flags=0)
         dialog.add_buttons(Gtk.STOCK_CLOSE, Gtk.ResponseType.CLOSE,
                            "Add selected", Gtk.ResponseType.OK)
         dialog.set_default_size(820, 300)
@@ -4237,7 +4277,7 @@ class EasySSHTunnelApp(Gtk.Window):
         dialog.show_all()
 
         added = 0
-        if dialog.run() == Gtk.ResponseType.OK:
+        if run_popup(dialog, dialog.get_transient_for()) == Gtk.ResponseType.OK:
             for row in store:
                 if not (row[0] and row[6]):
                     continue
@@ -4267,7 +4307,7 @@ class EasySSHTunnelApp(Gtk.Window):
         """Import SSH commands (supports multiple commands, one per line)"""
         dialog = Gtk.Dialog(
             title="Import SSH Commands",
-            parent=self,
+            transient_for=self._top_window(),
             flags=0
         )
         dialog.add_buttons(
@@ -4303,7 +4343,7 @@ class EasySSHTunnelApp(Gtk.Window):
         box.pack_start(example_label, False, False, 0)
 
         dialog.show_all()
-        response = dialog.run()
+        response = run_popup(dialog, dialog.get_transient_for())
 
         if response == Gtk.ResponseType.OK:
             text_buffer = text_view.get_buffer()
@@ -4452,8 +4492,7 @@ class EasySSHTunnelApp(Gtk.Window):
                     result_msg = f"Imported {imported_count} tunnel(s), {failed_count} failed:\n\n" + "\n".join(error_messages[:5])
                     if len(error_messages) > 5:
                         result_msg += f"\n... and {len(error_messages) - 5} more errors"
-                    dialog_result = Gtk.MessageDialog(
-                        parent=self,
+                    dialog_result = Gtk.MessageDialog(parent=self._top_window(),
                         flags=0,
                         message_type=Gtk.MessageType.WARNING,
                         buttons=Gtk.ButtonsType.OK,
@@ -4498,7 +4537,7 @@ class EasySSHTunnelApp(Gtk.Window):
         # Show export dialog
         dialog = Gtk.Dialog(
             title="Export SSH Commands",
-            parent=self,
+            transient_for=self._top_window(),
             flags=0
         )
         dialog.add_buttons(
@@ -4538,7 +4577,7 @@ class EasySSHTunnelApp(Gtk.Window):
         box.pack_start(button_box, False, False, 0)
 
         dialog.show_all()
-        dialog.run()
+        run_popup(dialog, dialog.get_transient_for())
         dialog.destroy()
 
     def on_copy_to_clipboard(self, widget, text_buffer):
@@ -4558,8 +4597,7 @@ class EasySSHTunnelApp(Gtk.Window):
 
     def show_error(self, message):
         """Show an error dialog"""
-        dialog = Gtk.MessageDialog(
-            parent=self,
+        dialog = Gtk.MessageDialog(parent=self._top_window(),
             flags=0,
             message_type=Gtk.MessageType.ERROR,
             buttons=Gtk.ButtonsType.OK,
