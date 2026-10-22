@@ -169,13 +169,14 @@ cd EasierSSHTunnelManager
 
 ### Updating to Latest Version
 
-```bash
-cd EasierSSHTunnelManager
-git pull
-sudo ./install.sh
-```
+The app compares itself with the version on this repository's `master` branch:
+- **Settings → Search for updates** shows whether a newer version exists, with the latest change, and offers **Install update**. The app then replaces itself and restarts; running tunnels are switched on again.
+- Once a day the app checks by itself and shows a notification when there is a new version.
+- From a terminal: `easier_ssh_tunnel.py --update`
 
-Your tunnel configurations in `~/.config/easier-ssh-tunnel/tunnels.json` are kept.
+The update replaces the app wherever it is installed. A system-wide install (`/usr/local`) asks for your password. New dependencies are not installed by an update; run `sudo ./install.sh` from a fresh clone for that.
+
+Your tunnel configurations in `~/.config/easier-ssh-tunnel/` are kept.
 
 ## Usage
 

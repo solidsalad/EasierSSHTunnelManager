@@ -25,18 +25,23 @@ import cairo
 import subprocess
 import fnmatch
 import glob
+import hashlib
 import ipaddress
 import itertools
 import colorsys
 import json
 import math
+import shlex
 import sqlite3
+import tarfile
+import urllib.request
 import struct
 import tempfile
 import urllib.parse
 import os
 import shutil
 import signal
+import sys
 import re
 import socket
 import threading
@@ -447,6 +452,7 @@ class SSHTunnelManager:
         self.wanted = set()  # tunnel ids the user switched on; down while wanted = Stopped
         self.scanner = PortScanner()
         self.sites = None  # TunnelRules, set when site tracking is on
+        self.batch_mode = False  # ssh -o BatchMode=yes: fail instead of asking for a password
 
     def _read_stderr(self, tunnel_id, process):
         """Keep the last stderr line of a tunnel as its message; with site tracking, record the
@@ -498,6 +504,8 @@ class SSHTunnelManager:
         log_level = 'DEBUG2' if self.sites is not None and tunnel_type == 'dynamic' else 'ERROR'
         cmd = ['ssh', '-N', '-o', 'ControlMaster=no', '-o', 'ControlPath=none',
                '-o', 'ExitOnForwardFailure=yes', '-o', f'LogLevel={log_level}']
+        if self.batch_mode:
+            cmd += ['-o', 'BatchMode=yes']
 
         if tunnel_type == 'local':
             # Local port forwarding: -L local_port:remote_host:remote_port
@@ -1630,6 +1638,93 @@ def tray_icon_with_badge(base_png, out_dir, name, count=0, badge_color=BADGE_RED
     return name
 
 
+# Updates come from the master branch of this repository
+UPDATE_REPO = "solidsalad/EasierSSHTunnelManager"
+UPDATE_BRANCH = "master"
+UPDATE_CHECK_SECONDS = 24 * 3600
+
+
+def _download(url, timeout=15):
+    request = urllib.request.Request(url, headers={'User-Agent': APP_ID})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read()
+
+
+def installed_script():
+    return os.path.realpath(os.path.abspath(__file__))
+
+
+def check_for_update():
+    """Compare the installed script with the one on master. Returns a dict with 'available',
+    and 'date' / 'message' of the latest commit when GitHub's API answers."""
+    remote = _download(f"https://raw.githubusercontent.com/{UPDATE_REPO}/{UPDATE_BRANCH}/"
+                       "easier_ssh_tunnel.py")
+    with open(installed_script(), 'rb') as f:
+        local = f.read()
+    result = {'available': hashlib.sha256(remote).hexdigest() != hashlib.sha256(local).hexdigest(),
+              'id': hashlib.sha256(remote).hexdigest()[:12], 'date': '', 'message': ''}
+    try:
+        commit = json.loads(_download(
+            f"https://api.github.com/repos/{UPDATE_REPO}/commits/{UPDATE_BRANCH}"))
+        result['date'] = commit['commit']['committer']['date'][:10]
+        result['message'] = commit['commit']['message'].splitlines()[0]
+    except (OSError, ValueError, KeyError):
+        pass
+    return result
+
+
+def install_update(gui=True):
+    """Download master and replace the installed script and icons, wherever they are installed.
+    Uses pkexec (gui) or sudo when the install location is not writable. Returns (ok, message)."""
+    script = installed_script()
+    icon_dirs = [d for d in (os.path.join(os.path.dirname(script), 'icons'),
+                             f"/usr/local/share/{APP_ID}/icons") if os.path.isdir(d)]
+    with tempfile.TemporaryDirectory() as tmp:
+        archive = os.path.join(tmp, 'master.tar.gz')
+        try:
+            with open(archive, 'wb') as f:
+                f.write(_download(f"https://codeload.github.com/{UPDATE_REPO}/tar.gz/refs/heads/"
+                                  f"{UPDATE_BRANCH}", timeout=60))
+            with tarfile.open(archive) as tar:
+                try:
+                    tar.extractall(tmp, filter='data')
+                except TypeError:
+                    # Python without extraction filters: refuse paths outside the folder
+                    root = os.path.realpath(tmp)
+                    for member in tar.getmembers():
+                        target = os.path.realpath(os.path.join(tmp, member.name))
+                        if not target.startswith(root + os.sep) or member.issym() or member.islnk():
+                            raise tarfile.TarError(f"unsafe path in archive: {member.name}")
+                    tar.extractall(tmp)
+        except (OSError, tarfile.TarError) as e:
+            return False, f"Download failed: {e}"
+        sources = [d for d in glob.glob(os.path.join(tmp, '*')) if os.path.isdir(d)]
+        if not sources or not os.path.isfile(os.path.join(sources[0], 'easier_ssh_tunnel.py')):
+            return False, "The download does not contain easier_ssh_tunnel.py"
+        source = sources[0]
+        try:
+            compile(open(os.path.join(source, 'easier_ssh_tunnel.py')).read(), 'update', 'exec')
+        except SyntaxError as e:
+            return False, f"The new version does not compile, not installed: {e}"
+        copies = [['install', '-m', '755', os.path.join(source, 'easier_ssh_tunnel.py'), script]]
+        for icon_dir in icon_dirs:
+            for icon in glob.glob(os.path.join(source, 'icons', '*.png')):
+                copies.append(['install', '-m', '644', icon,
+                               os.path.join(icon_dir, os.path.basename(icon))])
+        writable = all(os.access(os.path.dirname(c[-1]), os.W_OK) for c in copies)
+        if writable:
+            commands = copies
+        else:
+            # One elevated shell for all copies, so the password is asked once
+            elevate = ['pkexec'] if gui and shutil.which('pkexec') else ['sudo']
+            commands = [elevate + ['sh', '-c', ' && '.join(shlex.join(c) for c in copies)]]
+        for command in commands:
+            result = subprocess.run(command, capture_output=True, text=True)
+            if result.returncode != 0:
+                return False, (result.stderr.strip() or "Installing the update failed")
+    return True, f"Updated {script}"
+
+
 def tray_available():
     """True when a StatusNotifier host (system tray) runs in this session"""
     try:
@@ -2548,6 +2643,15 @@ class SettingsDialog(Gtk.Dialog):
                               self._button("Export\u2026", lambda: app.on_export_zeroomega(None))))
         content.pack_start(actions, False, False, 0)
 
+        # Updates
+        content.pack_start(self._heading("Updates"), False, False, 12)
+        updates = self._group()
+        updates.add(self._row("software-update-available-symbolic", "Search for updates",
+                              f"Compares this version with {UPDATE_REPO} ({UPDATE_BRANCH}); "
+                              "also checked once a day", self._button(
+                                  "Search\u2026", lambda: app.on_check_updates(self))))
+        content.pack_start(updates, False, False, 0)
+
         # Site tracking
         content.pack_start(self._heading("Site tracking for ZeroOmega auto switch"), False, False, 12)
         tracking = self._group()
@@ -2755,6 +2859,7 @@ class EasySSHTunnelApp(Gtk.Window):
         self.tunnels_config = self.config_manager.load_tunnels()
         self.color_memory = ColorMemory(self.config_manager.config_dir)
         self.settings = AppSettings(self.config_manager.config_dir)
+        self.tunnel_manager.batch_mode = bool(self.settings.get('ssh_batch_mode', False))
         self.site_history = TunnelRules(self.config_manager.config_dir,
                                         keep_hosts=self.settings.get('keep_hosts', False))
         if self.settings.get('track_sites', False):
@@ -2891,6 +2996,9 @@ class EasySSHTunnelApp(Gtk.Window):
 
         # Load saved tunnels
         self.refresh_tunnel_list()
+
+        # Look for a new version on master a minute after start, then once a day
+        GLib.timeout_add_seconds(60, self._scheduled_update_check)
 
         # Update status periodically, scan for outside tunnels a bit less often
         GLib.timeout_add_seconds(2, self.update_status)
@@ -3446,6 +3554,85 @@ class EasySSHTunnelApp(Gtk.Window):
 
     # Choices in the dialog for Terminal on a tunnel that is not open
     TERMINAL_SESSION, TERMINAL_TUNNEL, TERMINAL_BOTH = 1, 2, 3
+
+    def _scheduled_update_check(self):
+        last = self.settings.get('last_update_check', 0)
+        if time.time() - last >= UPDATE_CHECK_SECONDS:
+            self.settings.set('last_update_check', int(time.time()))
+            threading.Thread(target=self._background_update_check, daemon=True).start()
+        GLib.timeout_add_seconds(3600, self._scheduled_update_check)
+        return False
+
+    def _background_update_check(self):
+        try:
+            info = check_for_update()
+        except OSError:
+            return
+        if info['available'] and self.settings.get('notified_update') != info['id']:
+            self.settings.set('notified_update', info['id'])
+            GLib.idle_add(lambda: desktop_notify(
+                "Update available",
+                (f"{info['message']} ({info['date']}). " if info['message'] else "")
+                + "Install it under Settings \u2192 Search for updates.") and False)
+
+    def on_check_updates(self, parent):
+        """Check master in the background and offer to install a newer version"""
+        progress = Gtk.MessageDialog(parent=parent, flags=0, message_type=Gtk.MessageType.INFO,
+                                     buttons=Gtk.ButtonsType.CANCEL, text="Searching for updates\u2026")
+        result = {}
+
+        def work():
+            try:
+                result['info'] = check_for_update()
+            except OSError as e:
+                result['error'] = str(e)
+            GLib.idle_add(lambda: progress.response(Gtk.ResponseType.OK) and False)
+        threading.Thread(target=work, daemon=True).start()
+        if progress.run() != Gtk.ResponseType.OK:
+            progress.destroy()
+            return
+        progress.destroy()
+        if 'error' in result:
+            self.show_error(f"Could not check for updates: {result['error']}")
+            return
+        info = result['info']
+        if not info['available']:
+            done = Gtk.MessageDialog(parent=parent, flags=0, message_type=Gtk.MessageType.INFO,
+                                     buttons=Gtk.ButtonsType.OK, text="You have the latest version")
+            done.format_secondary_text(f"Same as {UPDATE_REPO} {UPDATE_BRANCH}"
+                                       + (f", last change {info['date']}." if info['date'] else "."))
+            done.run()
+            done.destroy()
+            return
+        ask = Gtk.MessageDialog(parent=parent, flags=0, message_type=Gtk.MessageType.QUESTION,
+                                buttons=Gtk.ButtonsType.NONE, text="A newer version is available")
+        ask.format_secondary_text(
+            (f"Latest change ({info['date']}): {info['message']}\n\n" if info['message'] else "")
+            + "Installing replaces the app with the version on master and restarts it; running "
+              "tunnels are switched on again.")
+        ask.add_buttons("Later", Gtk.ResponseType.CANCEL, "Install update", Gtk.ResponseType.OK)
+        ask.set_default_response(Gtk.ResponseType.OK)
+        answer = ask.run()
+        ask.destroy()
+        if answer != Gtk.ResponseType.OK:
+            return
+        ok, message = install_update(gui=True)
+        if not ok:
+            self.show_error(message)
+            return
+        self.restart_app()
+
+    def restart_app(self):
+        """Start the installed version again with the running tunnels, then quit this one"""
+        running = [c.get('id') for c in self.tunnels_config
+                   if self.tunnel_manager.is_running(c.get('id'))]
+        self.tunnel_manager.cleanup()
+        args = [sys.executable, installed_script()] + [a for a in sys.argv[1:] if a == '--no-indicator']
+        if running:
+            args += ['--start-tunnels', ','.join(running)]
+        subprocess.Popen(args, start_new_session=True, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        Gtk.main_quit()
 
     def on_open_settings(self, button):
         SettingsDialog(self).run_and_close()
@@ -4563,7 +4750,22 @@ class SSHTunnelIndicator:
 
 
 def main():
-    import sys
+    if '--update' in sys.argv:
+        print(f"Checking {UPDATE_REPO} ({UPDATE_BRANCH})...")
+        try:
+            info = check_for_update()
+        except OSError as e:
+            sys.exit(f"Could not check for updates: {e}")
+        if not info['available']:
+            print("Already the latest version.")
+            return
+        if info['message']:
+            print(f"New version: {info['message']} ({info['date']})")
+        ok, message = install_update(gui=False)
+        print(message)
+        if ok:
+            print("Restart the app (Quit in the tray menu, then start it again) to use it.")
+        sys.exit(0 if ok else 1)
 
     signal.signal(signal.SIGINT, signal.SIG_DFL)  # Allow Ctrl+C to quit
 
