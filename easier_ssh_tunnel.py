@@ -2476,8 +2476,9 @@ class TunnelDialog(Gtk.Dialog):
         if tunnel_data:
             self.load_data(tunnel_data)
 
-        self.on_type_changed(self.type_combo)
         self.show_all()
+        # After show_all, which would show the fields this tunnel type does not use again
+        self.on_type_changed(self.type_combo)
 
     def on_type_changed(self, combo):
         """Update UI based on selected tunnel type"""
@@ -2530,7 +2531,15 @@ class TunnelDialog(Gtk.Dialog):
     def open_color_picker(self):
         current = normalize_hex(self.color_entry.get_text()) or TUNNEL_PALETTE[0]
         picker = ColorPickerDialog(self, current, self.tint_row, self.color_memory)
-        if picker.run() == Gtk.ResponseType.OK:
+        # While the picker is open, a click on the main window must not close this dialog
+        window = self.get_transient_for()
+        paused = getattr(window, 'open_dialog', None)
+        if paused is not None:
+            window.open_dialog = None
+        response = picker.run()
+        if paused is not None:
+            window.open_dialog = paused
+        if response == Gtk.ResponseType.OK:
             color, row = picker.result()
             self.tint_row = row
             self._tint_row_hint = list(row)
@@ -2578,12 +2587,47 @@ class TunnelDialog(Gtk.Dialog):
                     missing.append("Remote Port")
         return missing
 
+    def _confirm_discard(self):
+        """True when there is nothing to lose, or the user agrees to discard the changes"""
+        if self.get_data() == self._initial_data:
+            return True
+        ask = Gtk.MessageDialog(parent=self, flags=0, message_type=Gtk.MessageType.QUESTION,
+                                buttons=Gtk.ButtonsType.NONE, text="Discard your changes?")
+        ask.format_secondary_text("The changes to this tunnel have not been saved.")
+        ask.add_buttons("Keep editing", Gtk.ResponseType.CANCEL,
+                        "Discard", Gtk.ResponseType.OK)
+        ask.set_default_response(Gtk.ResponseType.CANCEL)
+        discard = ask.run() == Gtk.ResponseType.OK
+        ask.destroy()
+        return discard
+
+    def request_close(self):
+        """Close like Cancel, e.g. after a click outside the dialog"""
+        self.response(Gtk.ResponseType.CANCEL)
+        return False
+
     def run_until_valid(self):
-        """Run the dialog; on OK with missing fields, warn and keep the dialog open"""
+        """Run the dialog; on OK with missing fields, warn and keep the dialog open; on Cancel,
+        Escape, closing or a click outside, ask before discarding changes"""
+        self._initial_data = self.get_data()
+        parent = self.get_transient_for()
+        if parent is not None and hasattr(parent, 'open_dialog'):
+            parent.open_dialog = self
+            # run() makes the dialog modal; lift that so a click on the main window reaches it
+            self.connect("map", lambda *_: GLib.idle_add(lambda: self.set_modal(False)))
+        try:
+            return self._run_loop()
+        finally:
+            if parent is not None and hasattr(parent, 'open_dialog'):
+                parent.open_dialog = None
+
+    def _run_loop(self):
         while True:
             response = self.run()
             if response != Gtk.ResponseType.OK:
-                return response
+                if self._confirm_discard():
+                    return response
+                continue
             missing = self.missing_fields()
             if not missing:
                 return response
@@ -2947,10 +2991,16 @@ class EasySSHTunnelApp(Gtk.Window):
         self.tunnel_view.get_style_context().add_class("tunnel-list")
         self.tunnel_view.connect("row-activated", self.on_row_activated)
         self.tunnel_view.connect("button-press-event", self.on_list_button_press)
+        # A click anywhere on the main window while a tunnel dialog is open closes that dialog
+        self.open_dialog = None
+        self.outside_click = Gtk.GestureMultiPress.new(self)
+        self.outside_click.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        self.outside_click.connect("pressed", self.on_window_pressed)
         # Terminal and Duplicate need a selected tunnel
         self.tunnel_view.get_selection().connect("changed", self.on_selection_changed)
         self.toolbar_buttons["Terminal"].set_sensitive(False)
-        self.toolbar_buttons["Duplicate"].set_sensitive(False)
+        for name in self.SELECTION_BUTTONS:
+            self.toolbar_buttons[name].set_sensitive(False)
 
         # On/off switch per row
         renderer = CellRendererSwitch()
@@ -3355,7 +3405,11 @@ class EasySSHTunnelApp(Gtk.Window):
             # GTK's own double-click would activate the row a second time
             return True
         hit = view.get_path_at_pos(int(event.x), int(event.y))
-        if not hit or hit[1] is self.switch_column:
+        if not hit:
+            # Empty space below the last tunnel: deselect
+            view.get_selection().unselect_all()
+            return True
+        if hit[1] is self.switch_column:
             return False
         selected = self._selected_config()
         clicked = self.tunnel_store[hit[0]][7]
@@ -3552,10 +3606,18 @@ class EasySSHTunnelApp(Gtk.Window):
             self.ignored_external.update((e['port'], e['pid']) for e in self._new_external())
         self.auto_scan()
 
+    # Toolbar buttons that act on the selected tunnel
+    SELECTION_BUTTONS = ("Edit", "Duplicate", "Remove", "Start", "Stop", "Terminal")
+
     def on_selection_changed(self, selection):
         selected = self._selected_config()
-        for name in ("Terminal", "Duplicate"):
+        for name in self.SELECTION_BUTTONS:
             self.toolbar_buttons[name].set_sensitive(selected is not None)
+
+    def on_window_pressed(self, gesture, n_press, x, y):
+        if self.open_dialog is not None:
+            gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+            GLib.idle_add(self.open_dialog.request_close)
 
     # Choices in the dialog for Terminal on a tunnel that is not open
     TERMINAL_SESSION, TERMINAL_TUNNEL, TERMINAL_BOTH = 1, 2, 3
